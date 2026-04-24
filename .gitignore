@@ -1,0 +1,26 @@
+# Rust build artifacts
+/target
+
+# For binary crates, we DO keep Cargo.lock in version control
+# to ensure reproducible builds. Do not ignore it.
+# Cargo.lock
+
+# Backup files
+*.swp
+*~
+*.bak
+
+# macOS
+.DS_Store
+
+# Local development database copies
+/threatstream.db
+*.db-journal
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Test artifacts
+*.profraw
