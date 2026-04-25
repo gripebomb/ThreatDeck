@@ -24,3 +24,7 @@
 
 # Test artifacts
 *.profraw
+
+# Planning Docs
+
+docs/
