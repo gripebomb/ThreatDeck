@@ -4,10 +4,10 @@ version = "0.1.0"
 edition = "2021"
 description = "Terminal-based threat intelligence monitoring and alerting platform"
 license = "MIT"
-repository = "https://github.com/ThreatDeck/ThreatDeck"
+repository = "https://github.com/gripebomb/ThreatDeck"
 keywords = ["threat-intelligence", "tui", "security", "monitoring", "alerts"]
 categories = ["command-line-utilities", "security"]
-authors = ["ThreatDeck Contributors"]
+authors = ["gripebomb"]
 exclude = ["target/", ".git/"]
 
 [[bin]]
