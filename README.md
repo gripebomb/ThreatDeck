@@ -36,7 +36,6 @@
 
 <img width="1079" height="837" alt="image" src="https://github.com/user-attachments/assets/fb372f6b-7faf-4ba6-8756-6232b365a3e1" />
 
-
 ## Features
 
 - **Multi-source Feed Management** — Aggregate threat intelligence from APIs, RSS/Atom feeds, website scraping, and `.onion` sites via Tor
@@ -59,14 +58,14 @@ Requires Rust 1.75 or later.
 
 ```bash
 # Clone the repository
-git clone https://github.com/ThreatDeck/ThreatDeck.git
+git clone https://github.com/gripebomb/ThreatDeck.git
 cd ThreatDeck
 
 # Build and install
 cargo install --path .
 
 # Or install directly from git
-cargo install --git https://github.com/ThreatDeck/ThreatDeck.git
+cargo install --git https://github.com/gripebomb/ThreatDeck.git
 ```
 
 The binary will be installed as `ThreatDeck` in your Cargo bin directory (usually `~/.cargo/bin/`).
@@ -74,7 +73,7 @@ The binary will be installed as `ThreatDeck` in your Cargo bin directory (usuall
 ### Build from Source
 
 ```bash
-git clone https://github.com/ThreatDeck/ThreatDeck.git
+git clone https://github.com/gripebomb/ThreatDeck.git
 cd ThreatDeck
 
 # Debug build
@@ -98,6 +97,7 @@ ThreatDeck
 ```
 
 Default paths:
+
 - **Config**: `~/.config/ThreatDeck/config.toml`
 - **Database**: `~/.local/share/ThreatDeck/ThreatDeck.db`
 
@@ -177,6 +177,7 @@ For JSON REST APIs, use JSONPath expressions to extract fields. Two templates ar
 Create custom templates via SQL or API. The `pagination_config` field supports offset/limit and page-based pagination strategies.
 
 **Example API feed configuration:**
+
 - URL: `https://api.ransomfeed.it/v1/posts`
 - Type: `API`
 - Template: `Ransomfeed.it`
@@ -187,6 +188,7 @@ Create custom templates via SQL or API. The `pagination_config` field supports o
 Standard RSS 2.0 and Atom 1.0 feeds are automatically parsed. Simply provide the feed URL and select type `RSS`.
 
 **Example RSS feeds:**
+
 - `https://feeds.securityweek.com/securityweek`
 - `https://www.bleepingcomputer.com/feed/`
 
@@ -195,6 +197,7 @@ Standard RSS 2.0 and Atom 1.0 feeds are automatically parsed. Simply provide the
 For HTML pages without structured feeds, the scraper extracts text content from the page body for keyword matching. Provide the target URL and select type `Website`.
 
 **Example:**
+
 - URL: `https://www.cisa.gov/news-events/cybersecurity-advisories`
 - Type: `Website`
 - Interval: `600` (10 minutes)
@@ -206,6 +209,7 @@ Access `.onion` threat intelligence sources via a Tor SOCKS5 proxy. Configure th
 **Requirements:** Tor must be running locally with a SOCKS5 listener.
 
 **Example:**
+
 - URL: `http://ransomxifxwc5ste.onion/posts`
 - Type: `Onion`
 - Tor Proxy: `socks5h://127.0.0.1:9050`
