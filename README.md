@@ -6,15 +6,6 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/ThreatDeck/ThreatDeck/actions/workflows/ci.yml">
-    <img src="https://img.shields.io/github/actions/workflow/status/ThreatDeck/ThreatDeck/ci.yml?branch=main&label=CI&style=flat-square" alt="CI Status">
-  </a>
-  <a href="https://github.com/ThreatDeck/ThreatDeck/releases">
-    <img src="https://img.shields.io/github/v/release/ThreatDeck/ThreatDeck?style=flat-square" alt="Latest Release">
-  </a>
-  <a href="LICENSE">
-    <img src="https://img.shields.io/github/license/ThreatDeck/ThreatDeck?style=flat-square" alt="License">
-  </a>
   <img src="https://img.shields.io/badge/rust-1.75%2B-orange.svg?style=flat-square" alt="Rust 1.75+">
   <img src="https://img.shields.io/badge/platform-linux%20%7C%20macOS-lightgrey.svg?style=flat-square" alt="Platform">
 </p>
