@@ -21,33 +21,30 @@
 
 ---
 
-## ASCII Dashboard Preview
+## Dashboard Preview
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  ThreatDeck — Dashboard                                                   │
-├──────────────────┬──────────────────┬──────────────────┬────────────────────┤
-│     Feeds        │     Alerts       │    Keywords      │      Health        │
-│       6          │       15         │        8         │        100%        │
-│    5 healthy     │     4 unread     │                  │      healthy       │
-└──────────────────┴──────────────────┴──────────────────┴────────────────────┘
-┌──────────────────────────────┬──────────────────────────────────────────────┐
-│  Criticality Distribution    │  Recent Alerts                               │
-│                              │                                              │
-│       Low: ████████ 5 (33.3%)│  [●] [ransomware] Ransomware alert — 2m ago │
-│    Medium: ██████ 4 (26.7%)  │  [●] [CVE-2024-] Critical vuln — 15m ago   │
-│      High: ████ 3 (20.0%)    │  [●] [APT29] APT activity det — 1h ago     │
-│   Critical: ███ 3 (20.0%)    │  [○] [phishing] Phishing camp — 3h ago     │
-└──────────────────────────────┴──────────────────────────────────────────────┘
-┌─────────────────────────────────────────────────────────────────────────────┐
-│  7-Day Alert Trend                                                          │
-│  2024-01-15 ████████████████████████████████ 12                             │
-│  2024-01-14 ████████████████████ 8                                          │
-│  2024-01-13 ██████████ 4                                                    │
-│  2024-01-12 ██████████████████████████ 10                                   │
-└─────────────────────────────────────────────────────────────────────────────┘
-[r] Refresh  [1-8] Navigate  [?] Help  [q] Quit
-```
+<img width="1077" height="838" alt="image" src="https://github.com/user-attachments/assets/3702b588-3c64-42db-a20a-9d8643f74204" />
+
+## Feeds Preview
+
+<img width="1076" height="832" alt="image" src="https://github.com/user-attachments/assets/2408a487-780d-4a15-88bd-5514efc6a4bc" />
+
+## Alerts Preview
+
+<img width="1076" height="840" alt="image" src="https://github.com/user-attachments/assets/07564c80-b483-4f36-a74d-618a7d85f594" />
+
+## Articles Preview
+
+<img width="1078" height="839" alt="image" src="https://github.com/user-attachments/assets/f0e78eab-8e1f-4f01-9b5b-876a3be0d5f9" />
+
+## Keywords Preview
+
+<img width="1071" height="829" alt="image" src="https://github.com/user-attachments/assets/c8763b62-c846-456b-92a8-0394ff9a4cff" />
+
+## Tags Preview
+
+<img width="1079" height="837" alt="image" src="https://github.com/user-attachments/assets/fb372f6b-7faf-4ba6-8756-6232b365a3e1" />
+
 
 ## Features
 
