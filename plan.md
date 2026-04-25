@@ -1,4 +1,4 @@
-# ThreatStream TUI — Build Plan
+# ThreatDeck TUI — Build Plan
 
 A terminal-based threat intelligence monitoring and alerting platform for SOCs, security researchers, and threat intel analysts.
 

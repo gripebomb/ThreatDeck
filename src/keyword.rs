@@ -1,6 +1,6 @@
+use crate::types::{Keyword, MatchResult};
 use anyhow::Result;
 use regex::Regex;
-use crate::types::{Keyword, MatchResult};
 
 pub struct KeywordEngine;
 
@@ -33,7 +33,7 @@ impl KeywordEngine {
         } else {
             kw.pattern.to_lowercase()
         };
-        
+
         let mut start = 0;
         while let Some(pos) = search_content[start..].find(&pattern) {
             let absolute_pos = start + pos;

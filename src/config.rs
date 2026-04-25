@@ -35,13 +35,21 @@ pub struct Paths {
 
 impl Paths {
     pub fn new() -> Result<Self> {
-        let dirs = ProjectDirs::from("", "", "threatstream")
+        let dirs = ProjectDirs::from("", "", "ThreatDeck")
             .context("could not determine project directories")?;
-        let config_dir = dirs.config_dir().to_path_buf();
-        let data_dir = dirs.data_dir().to_path_buf();
+        let config_dir = dirs
+            .config_dir()
+            .parent()
+            .map(|parent| parent.join("ThreatDeck"))
+            .unwrap_or_else(|| dirs.config_dir().to_path_buf());
+        let data_dir = dirs
+            .data_dir()
+            .parent()
+            .map(|parent| parent.join("ThreatDeck"))
+            .unwrap_or_else(|| dirs.data_dir().to_path_buf());
         Ok(Self {
             config_file: config_dir.join("config.toml"),
-            db_file: data_dir.join("threatstream.db"),
+            db_file: data_dir.join("ThreatDeck.db"),
             config_dir,
             data_dir,
         })
@@ -71,7 +79,6 @@ pub fn load_app_config(path: &Path) -> Result<AppConfig> {
 
 pub fn save_app_config(path: &Path, config: &AppConfig) -> Result<()> {
     let content = toml::to_string_pretty(config)?;
-    fs::write(path, content)
-        .with_context(|| format!("writing config file: {}", path.display()))?;
+    fs::write(path, content).with_context(|| format!("writing config file: {}", path.display()))?;
     Ok(())
 }

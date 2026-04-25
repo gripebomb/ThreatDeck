@@ -1,11 +1,11 @@
 pub mod api;
-pub mod rss;
-pub mod web;
 pub mod onion;
+pub mod rss;
 pub mod utils;
+pub mod web;
 
+use crate::types::{ApiTemplate, Feed, FeedResult, FeedType};
 use anyhow::Result;
-use crate::types::{Feed, FeedResult, FeedType, ApiTemplate};
 
 pub trait FeedFetcher {
     fn fetch(&self, feed: &Feed) -> Result<FeedResult>;

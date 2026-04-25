@@ -1,11 +1,14 @@
+#![allow(dead_code)]
+
 mod ai;
+mod alert;
 mod app;
+mod article;
 mod config;
 mod db;
 mod feed;
 mod keyword;
 mod notify;
-mod alert;
 mod scheduler;
 mod tag;
 mod template;
@@ -20,15 +23,16 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use ratatui::{
-    backend::CrosstermBackend,
-    Terminal,
-};
+use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 use std::time::{Duration, Instant};
 
 #[derive(Parser)]
-#[command(name = "threatstream", version, about = "Terminal-based threat intelligence monitoring and alerting platform")]
+#[command(
+    name = "ThreatDeck",
+    version,
+    about = "Terminal-based threat intelligence monitoring and alerting platform"
+)]
 struct Cli {
     /// Print config paths and exit
     #[arg(long)]
@@ -41,7 +45,7 @@ struct Cli {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let paths = config::Paths::new()?;
-    
+
     if cli.config_paths {
         println!("config dir : {}", paths.config_dir.display());
         println!("data dir   : {}", paths.data_dir.display());
@@ -51,7 +55,7 @@ fn main() -> Result<()> {
     }
 
     paths.ensure_dirs().context("creating config/data dirs")?;
-    
+
     let app_config = config::load_app_config(&paths.config_file)?;
     let db = db::Db::open(&paths.db_file)?;
     db.init_schema().context("initializing database schema")?;
@@ -76,7 +80,10 @@ fn main() -> Result<()> {
     res
 }
 
-fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut app::App) -> Result<()> {
+fn run_app(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    app: &mut app::App,
+) -> Result<()> {
     let tick_rate = Duration::from_millis(app.config.tick_rate_ms);
     let dashboard_refresh = Duration::from_secs(app.config.dashboard_refresh_secs);
     let mut last_tick = Instant::now();

@@ -14,7 +14,7 @@
 .DS_Store
 
 # Local development database copies
-/threatstream.db
+/ThreatDeck.db
 *.db-journal
 
 # IDE

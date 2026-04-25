@@ -59,6 +59,26 @@ CREATE INDEX IF NOT EXISTS idx_alerts_detected ON alerts(detected_at);
 CREATE INDEX IF NOT EXISTS idx_alerts_read ON alerts(read);
 CREATE INDEX IF NOT EXISTS idx_alerts_hash ON alerts(content_hash);
 
+CREATE TABLE IF NOT EXISTS feed_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    feed_id INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    url TEXT,
+    author TEXT,
+    summary TEXT,
+    content TEXT,
+    published_at TIMESTAMP,
+    fetched_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    content_hash TEXT NOT NULL UNIQUE,
+    read INTEGER NOT NULL DEFAULT 0,
+    metadata_json TEXT,
+    FOREIGN KEY (feed_id) REFERENCES feeds(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_feed_items_feed ON feed_items(feed_id, published_at);
+CREATE INDEX IF NOT EXISTS idx_feed_items_published ON feed_items(published_at DESC, fetched_at DESC);
+CREATE INDEX IF NOT EXISTS idx_feed_items_read ON feed_items(read);
+CREATE INDEX IF NOT EXISTS idx_feed_items_hash ON feed_items(content_hash);
+
 CREATE TABLE IF NOT EXISTS tags (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,
@@ -110,6 +130,11 @@ CREATE TABLE IF NOT EXISTS feed_health_logs (
     FOREIGN KEY (feed_id) REFERENCES feeds(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_health_logs_feed ON feed_health_logs(feed_id, checked_at);
+
+CREATE TABLE IF NOT EXISTS app_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 
 -- Default data
 INSERT OR IGNORE INTO tags (name, color, description) VALUES 

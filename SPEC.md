@@ -1,11 +1,11 @@
-# SPEC.md — ThreatStream TUI
+# SPEC.md — ThreatDeck TUI
 
 ## 1. Overview
 
-ThreatStream is a terminal-based threat intelligence monitoring and alerting platform designed for SOCs, security researchers, and threat intelligence analysts. It aggregates intelligence from multiple feed sources (API, RSS, Website, Onion), matches content against configurable keywords with criticality levels, generates alerts, and delivers notifications via multiple channels.
+ThreatDeck is a terminal-based threat intelligence monitoring and alerting platform designed for SOCs, security researchers, and threat intelligence analysts. It aggregates intelligence from multiple feed sources (API, RSS, Website, Onion), matches content against configurable keywords with criticality levels, generates alerts, and delivers notifications via multiple channels.
 
-**Crate name**: `threatstream-tui`  
-**Binary name**: `threatstream`  
+**Crate name**: `ThreatDeck`  
+**Binary name**: `ThreatDeck`  
 **Edition**: 2021  
 **License**: MIT
 
@@ -444,13 +444,13 @@ impl Db {
 **File**: `src/config.rs`
 
 Uses `directories` crate for platform-appropriate paths:
-- Config dir: `~/.config/threatstream/`
-- Data dir: `~/.local/share/threatstream/`
+- Config dir: `~/.config/ThreatDeck/`
+- Data dir: `~/.local/share/ThreatDeck/`
 
 Files:
 - `config.toml` — App settings (theme, retention days, tick rate)
 - `feeds.toml` — Optional bulk feed import
-- Database: `data_dir/threatstream.db`
+- Database: `data_dir/ThreatDeck.db`
 
 ```rust
 pub struct Paths {
@@ -854,7 +854,7 @@ fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>, app: &mut App)
 |-----|--------|
 | `q` or `Ctrl+c` | Quit (if not in form) |
 | `Tab` / `Shift+Tab` | Navigate forward/backward through fields |
-| `1-7` | Jump to screen (Dashboard, Feeds, Alerts, Keywords, Tags, Logs, Settings) |
+| `1-8` | Jump to screen (Dashboard, Feeds, Alerts, Articles, Keywords, Tags, Logs, Settings) |
 | `F1` or `?` | Toggle help overlay |
 | `Esc` | Cancel form / Close popup / Go back |
 

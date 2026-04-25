@@ -1,17 +1,17 @@
 [package]
-name = "threatstream-tui"
+name = "ThreatDeck"
 version = "0.1.0"
 edition = "2021"
 description = "Terminal-based threat intelligence monitoring and alerting platform"
 license = "MIT"
-repository = "https://github.com/threatstream/threatstream-tui"
+repository = "https://github.com/ThreatDeck/ThreatDeck"
 keywords = ["threat-intelligence", "tui", "security", "monitoring", "alerts"]
 categories = ["command-line-utilities", "security"]
-authors = ["ThreatStream Contributors"]
+authors = ["ThreatDeck Contributors"]
 exclude = ["target/", ".git/"]
 
 [[bin]]
-name = "threatstream"
+name = "ThreatDeck"
 path = "src/main.rs"
 
 [dependencies]

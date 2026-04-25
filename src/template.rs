@@ -1,12 +1,15 @@
+use crate::types::{ApiTemplate, FetchedFeedItem};
 use anyhow::{bail, Result};
-use crate::types::{ApiTemplate, FeedItem};
 
 pub struct TemplateEngine;
 
 impl TemplateEngine {
-    pub fn extract_items(json: &serde_json::Value, template: &ApiTemplate) -> Result<Vec<FeedItem>> {
+    pub fn extract_items(
+        json: &serde_json::Value,
+        template: &ApiTemplate,
+    ) -> Result<Vec<FetchedFeedItem>> {
         let mut items = Vec::new();
-        
+
         // Try to find an array in the JSON
         let array = if let Some(arr) = json.as_array() {
             arr.clone()
@@ -22,7 +25,7 @@ impl TemplateEngine {
             }
             found.unwrap_or_else(|| vec![json.clone()])
         };
-        
+
         for item in array {
             let title = Self::extract_jsonpath(&item, &template.jsonpath_title);
             let description = Self::extract_jsonpath(&item, &template.jsonpath_description);
@@ -30,15 +33,22 @@ impl TemplateEngine {
             let source = Self::extract_jsonpath(&item, &template.jsonpath_source);
             let date_str = Self::extract_jsonpath(&item, &template.jsonpath_date);
             let date = date_str.and_then(|s| {
-                chrono::DateTime::parse_from_rfc3339(&s).ok()
+                chrono::DateTime::parse_from_rfc3339(&s)
+                    .ok()
                     .map(|dt| dt.with_timezone(&chrono::Utc))
-                    .or_else(|| chrono::DateTime::parse_from_rfc2822(&s).ok()
-                        .map(|dt| dt.with_timezone(&chrono::Utc)))
-                    .or_else(|| chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S").ok()
-                        .map(|dt| chrono::DateTime::from_naive_utc_and_offset(dt, chrono::Utc)))
+                    .or_else(|| {
+                        chrono::DateTime::parse_from_rfc2822(&s)
+                            .ok()
+                            .map(|dt| dt.with_timezone(&chrono::Utc))
+                    })
+                    .or_else(|| {
+                        chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S")
+                            .ok()
+                            .map(|dt| chrono::DateTime::from_naive_utc_and_offset(dt, chrono::Utc))
+                    })
             });
-            
-            items.push(FeedItem {
+
+            items.push(FetchedFeedItem {
                 title,
                 description,
                 url,
@@ -47,18 +57,22 @@ impl TemplateEngine {
                 raw_json: Some(item.to_string()),
             });
         }
-        
+
         Ok(items)
     }
-    
+
     fn extract_jsonpath(value: &serde_json::Value, path: &str) -> Option<String> {
         if path == "$" {
             return value.as_str().map(String::from);
         }
-        
+
         let mut current = value;
-        let parts: Vec<&str> = path.trim_start_matches('$').split('.').filter(|s| !s.is_empty()).collect();
-        
+        let parts: Vec<&str> = path
+            .trim_start_matches('$')
+            .split('.')
+            .filter(|s| !s.is_empty())
+            .collect();
+
         for part in &parts {
             if let Some(idx_str) = part.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
                 if let Ok(idx) = idx_str.parse::<usize>() {
@@ -68,12 +82,17 @@ impl TemplateEngine {
                 current = current.get(part)?;
             }
         }
-        
+
         current.as_str().map(String::from)
     }
-    
+
     pub fn validate_template(template: &ApiTemplate) -> Result<()> {
-        for path in &[&template.jsonpath_title, &template.jsonpath_description, &template.jsonpath_date, &template.jsonpath_url] {
+        for path in &[
+            &template.jsonpath_title,
+            &template.jsonpath_description,
+            &template.jsonpath_date,
+            &template.jsonpath_url,
+        ] {
             if !path.starts_with('$') {
                 bail!("JSONPath must start with $: {}", path);
             }

@@ -7,7 +7,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  BINARY_NAME: threatstream
+  BINARY_NAME: ThreatDeck
 
 jobs:
   build:
@@ -17,13 +17,13 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact_name: threatstream-x86_64-linux
+            artifact_name: ThreatDeck-x86_64-linux
           - os: macos-latest
             target: x86_64-apple-darwin
-            artifact_name: threatstream-x86_64-macos
+            artifact_name: ThreatDeck-x86_64-macos
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact_name: threatstream-aarch64-macos
+            artifact_name: ThreatDeck-aarch64-macos
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
@@ -96,21 +96,21 @@ jobs:
         with:
           name: Release ${{ github.ref_name }}
           body: |
-            ## threatstream ${{ github.ref_name }}
+            ## ThreatDeck ${{ github.ref_name }}
 
             ### Binaries
             | Platform | Architecture | Artifact |
             |----------|-------------|----------|
-            | Linux    | x86_64      | `threatstream-x86_64-linux` |
-            | macOS    | x86_64      | `threatstream-x86_64-macos` |
-            | macOS    | aarch64     | `threatstream-aarch64-macos` |
+            | Linux    | x86_64      | `ThreatDeck-x86_64-linux` |
+            | macOS    | x86_64      | `ThreatDeck-x86_64-macos` |
+            | macOS    | aarch64     | `ThreatDeck-aarch64-macos` |
 
             ### Installation
             Download the binary for your platform, make it executable, and place it in your `$PATH`:
 
             ```bash
-            chmod +x threatstream-<platform>
-            sudo mv threatstream-<platform> /usr/local/bin/threatstream
+            chmod +x ThreatDeck-<platform>
+            sudo mv ThreatDeck-<platform> /usr/local/bin/ThreatDeck
             ```
 
             ### Verification
@@ -119,9 +119,9 @@ jobs:
             sha256sum -c SHA256SUMS
             ```
           files: |
-            dist/threatstream-x86_64-linux
-            dist/threatstream-x86_64-macos
-            dist/threatstream-aarch64-macos
+            dist/ThreatDeck-x86_64-linux
+            dist/ThreatDeck-x86_64-macos
+            dist/ThreatDeck-aarch64-macos
             dist/SHA256SUMS
           draft: false
           prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}

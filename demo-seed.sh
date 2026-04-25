@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# demo-seed.sh — Populate threatstream database with demo data
+# demo-seed.sh — Populate ThreatDeck database with demo data
 #
 # Usage:
 #   ./demo-seed.sh                    # Use default database path
@@ -11,7 +11,7 @@ set -euo pipefail
 
 # ── Configuration ────────────────────────────────────────────────────────────
 
-DEFAULT_DB="${HOME}/.local/share/threatstream/threatstream.db"
+DEFAULT_DB="${HOME}/.local/share/ThreatDeck/ThreatDeck.db"
 DB_PATH="${1:-$DEFAULT_DB}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -44,7 +44,7 @@ error() {
 
 # ── Pre-flight Checks ────────────────────────────────────────────────────────
 
-info "ThreatStream Demo Data Seeder"
+info "ThreatDeck Demo Data Seeder"
 info "=============================="
 
 # Check sqlite3 is available
@@ -309,5 +309,5 @@ info "  • Keywords: $(sqlite3 "${DB_PATH}" "SELECT COUNT(*) FROM keywords;")"
 info "  • Alerts:   $(sqlite3 "${DB_PATH}" "SELECT COUNT(*) FROM alerts;")"
 info "  • Tags:     $(sqlite3 "${DB_PATH}" "SELECT COUNT(*) FROM tags;")"
 info ""
-ok  "Launch the app with: threatstream"
-info "Press keys 1-7 to navigate between screens."
+ok  "Launch the app with: ThreatDeck"
+info "Press keys 1-8 to navigate between screens."

@@ -1,4 +1,4 @@
-# ThreatStream TUI Design Review
+# ThreatDeck TUI Design Review
 
 > Reviewed against the TUI Design System principles (layout, interaction, color, accessibility, anti-patterns).
 
@@ -6,7 +6,7 @@
 
 ## 1. Executive Summary
 
-ThreatStream uses a **screen-switching (tabbed) layout** with seven full-screen views: Dashboard, Feeds, Alerts, Keywords, Tags, Logs, and Settings. The visual foundation is solid—Ratatui-based, with a configurable theme system and consistent three-zone layouts (header / content / footer) on most screens. However, several interaction gaps, accessibility oversights, and missing polish keep the TUI from feeling like a native, keyboard-first professional tool.
+ThreatDeck uses a **screen-switching (tabbed) layout** with eight full-screen views: Dashboard, Feeds, Alerts, Articles, Keywords, Tags, Logs, and Settings. The visual foundation is solid—Ratatui-based, with a configurable theme system and consistent three-zone layouts (header / content / footer) on most screens. However, several interaction gaps, accessibility oversights, and missing polish keep the TUI from feeling like a native, keyboard-first professional tool.
 
 **Overall grade: C+** — Functional and structured, but undiscoverable, inconsistent, and missing key affordances for power users.
 
@@ -23,7 +23,7 @@ ThreatStream uses a **screen-switching (tabbed) layout** with seven full-screen 
 ```
 
 - **Dashboard** attempts a Widget Dashboard paradigm (stats, pie distribution, recent alerts, trend chart).
-- **Feeds, Alerts, Keywords, Tags, Logs, Settings** use a Header + Scrollable List paradigm.
+- **Feeds, Alerts, Articles, Keywords, Tags, Logs, Settings** use a Header + Scrollable List paradigm.
 - **Forms** are modal overlays centered with `Clear`.
 - **Help, Confirm, Notifications** are global overlays rendered on top after the screen draw.
 
@@ -45,7 +45,7 @@ ThreatStream uses a **screen-switching (tabbed) layout** with seven full-screen 
 
 | Layer | Current | Ideal | Gap |
 |-------|---------|-------|-----|
-| **L0 Universal** | `q`, `1-7`, `Esc`, arrows | Same + `Enter`, `Tab` | Partial |
+| **L0 Universal** | `q`, `1-8`, `Esc`, arrows | Same + `Enter`, `Tab` | Partial |
 | **L1 Vim motions** | `j/k` on some lists | `j/k`, `gg`, `G`, `Ctrl+d/u`, `/` | **Missing `gg/G`, `Ctrl+d/u`, `/` search** |
 | **L2 Actions** | Single-letter per screen | Context-sensitive footer + Which-Key hints | **Footer is static, not contextual** |
 | **L3 Power** | None | `:` command mode, macros | **No command palette** |
@@ -300,7 +300,7 @@ The two-mode system (Normal / Typing) is a good idea borrowed from Vim, but it h
 
 ### Phase 2: Consistency & Polish (Week 2)
 6. Add a persistent left sidebar or top tab bar for navigation.
-7. Standardize footer text across all screens (always show `1-7`, `?`, `q`).
+7. Standardize footer text across all screens (always show `1-8`, `?`, `q`).
 8. Make footers **context-sensitive** (update when in a form, bulk mode, etc.).
 9. Add a mode indicator (`-- NORMAL --` / `-- INSERT --`) to the footer.
 10. Implement detail views for Alerts and Feeds (`Enter` to open, `Esc` to close).

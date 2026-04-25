@@ -1,4 +1,4 @@
-# threatstream-tui
+# ThreatDeck
 
 <p align="center">
   <b>Terminal-based threat intelligence monitoring and alerting platform</b><br>
@@ -6,14 +6,14 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/threatstream/threatstream-tui/actions/workflows/ci.yml">
-    <img src="https://img.shields.io/github/actions/workflow/status/threatstream/threatstream-tui/ci.yml?branch=main&label=CI&style=flat-square" alt="CI Status">
+  <a href="https://github.com/ThreatDeck/ThreatDeck/actions/workflows/ci.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/ThreatDeck/ThreatDeck/ci.yml?branch=main&label=CI&style=flat-square" alt="CI Status">
   </a>
-  <a href="https://github.com/threatstream/threatstream-tui/releases">
-    <img src="https://img.shields.io/github/v/release/threatstream/threatstream-tui?style=flat-square" alt="Latest Release">
+  <a href="https://github.com/ThreatDeck/ThreatDeck/releases">
+    <img src="https://img.shields.io/github/v/release/ThreatDeck/ThreatDeck?style=flat-square" alt="Latest Release">
   </a>
   <a href="LICENSE">
-    <img src="https://img.shields.io/github/license/threatstream/threatstream-tui?style=flat-square" alt="License">
+    <img src="https://img.shields.io/github/license/ThreatDeck/ThreatDeck?style=flat-square" alt="License">
   </a>
   <img src="https://img.shields.io/badge/rust-1.75%2B-orange.svg?style=flat-square" alt="Rust 1.75+">
   <img src="https://img.shields.io/badge/platform-linux%20%7C%20macOS-lightgrey.svg?style=flat-square" alt="Platform">
@@ -25,7 +25,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  ThreatStream — Dashboard                                                   │
+│  ThreatDeck — Dashboard                                                   │
 ├──────────────────┬──────────────────┬──────────────────┬────────────────────┤
 │     Feeds        │     Alerts       │    Keywords      │      Health        │
 │       6          │       15         │        8         │        100%        │
@@ -46,7 +46,7 @@
 │  2024-01-13 ██████████ 4                                                    │
 │  2024-01-12 ██████████████████████████ 10                                   │
 └─────────────────────────────────────────────────────────────────────────────┘
-[r] Refresh  [1-7] Navigate  [?] Help  [q] Quit
+[r] Refresh  [1-8] Navigate  [?] Help  [q] Quit
 ```
 
 ## Features
@@ -55,6 +55,7 @@
 - **JSONPath API Templates** — Extract structured data from JSON APIs using configurable JSONPath expressions for title, description, date, URL, and source fields
 - **Keyword Matching** — Simple text or regex-based keyword matching with 4 criticality levels (Low, Medium, High, Critical)
 - **Alert Generation** — Automatic alert creation with deduplication (content hashing), snippet extraction, and metadata preservation
+- **Cached Article Feed** — Browse every cached feed item across RSS/API sources and read cleaned article text directly in the terminal
 - **Tagging System** — Organize feeds, keywords, and alerts with color-coded custom tags
 - **Notifications** — Send alerts via Email (SMTP), Webhook, or Discord with per-channel minimum criticality thresholds
 - **Dashboard Overview** — At-a-glance statistics, criticality distribution, recent alerts, and 7-day trend visualization
@@ -70,23 +71,23 @@ Requires Rust 1.75 or later.
 
 ```bash
 # Clone the repository
-git clone https://github.com/threatstream/threatstream-tui.git
-cd threatstream-tui
+git clone https://github.com/ThreatDeck/ThreatDeck.git
+cd ThreatDeck
 
 # Build and install
 cargo install --path .
 
 # Or install directly from git
-cargo install --git https://github.com/threatstream/threatstream-tui.git
+cargo install --git https://github.com/ThreatDeck/ThreatDeck.git
 ```
 
-The binary will be installed as `threatstream` in your Cargo bin directory (usually `~/.cargo/bin/`).
+The binary will be installed as `ThreatDeck` in your Cargo bin directory (usually `~/.cargo/bin/`).
 
 ### Build from Source
 
 ```bash
-git clone https://github.com/threatstream/threatstream-tui.git
-cd threatstream-tui
+git clone https://github.com/ThreatDeck/ThreatDeck.git
+cd ThreatDeck
 
 # Debug build
 cargo build
@@ -95,32 +96,32 @@ cargo build
 cargo build --release
 
 # Binary location
-target/release/threatstream
+target/release/ThreatDeck
 ```
 
 ## Quick Start
 
 ### First Run
 
-On first launch, `threatstream` automatically creates its configuration and data directories:
+On first launch, `ThreatDeck` automatically creates its configuration and data directories:
 
 ```bash
-threatstream
+ThreatDeck
 ```
 
 Default paths:
-- **Config**: `~/.config/threatstream/config.toml`
-- **Database**: `~/.local/share/threatstream/threatstream.db`
+- **Config**: `~/.config/ThreatDeck/config.toml`
+- **Database**: `~/.local/share/ThreatDeck/ThreatDeck.db`
 
 To view the exact paths on your system:
 
 ```bash
-threatstream --config-paths
+ThreatDeck --config-paths
 ```
 
 ### Adding Feeds
 
-1. Launch the application: `threatstream`
+1. Launch the application: `ThreatDeck`
 2. Press `2` to navigate to the **Feeds** screen
 3. Press `a` to add a new feed
 4. Fill in the feed details (Tab to cycle fields, Enter to save):
@@ -152,7 +153,7 @@ threatstream --config-paths
 
 ## Configuration
 
-The configuration file is stored at `~/.config/threatstream/config.toml`:
+The configuration file is stored at `~/.config/ThreatDeck/config.toml`:
 
 ```toml
 theme = "dark"                    # dark, light, solarized, dracula, monokai
@@ -230,12 +231,12 @@ Access `.onion` threat intelligence sources via a Tor SOCKS5 proxy. Configure th
 | `1`            | Dashboard screen                            |
 | `2`            | Feeds screen                                |
 | `3`            | Alerts screen                               |
-| `4`            | Keywords screen                             |
-| `5`            | Tags screen                                 |
-| `6`            | Logs screen                                 |
-| `7`            | Settings screen                             |
+| `4`            | Articles screen                             |
+| `5`            | Keywords screen                             |
+| `6`            | Tags screen                                 |
+| `7`            | Logs screen                                 |
+| `8`            | Settings screen                             |
 | `q`            | Quit application                            |
-| `Ctrl+C`       | Force quit                                  |
 | `?` / `F1`     | Toggle help overlay                         |
 | `Esc`          | Cancel current action / Go back             |
 
@@ -244,7 +245,7 @@ Access `.onion` threat intelligence sources via a Tor SOCKS5 proxy. Configure th
 | Key            | Action                                      |
 |----------------|---------------------------------------------|
 | `r`            | Refresh dashboard data                      |
-| `1-7`          | Navigate to other screens                   |
+| `1-8`          | Navigate to other screens                   |
 
 ### Feeds
 
@@ -257,7 +258,8 @@ Access `.onion` threat intelligence sources via a Tor SOCKS5 proxy. Configure th
 | `d`            | Delete selected feed (with confirmation)    |
 | `m`            | Trigger manual fetch                        |
 | `t`            | Assign tags to feed                         |
-| `Enter`        | Toggle feed enabled/disabled                |
+| `Enter`        | View feed details                           |
+| `Space`        | Toggle feed enabled/disabled                |
 | `/`            | Filter feeds                                |
 | `s`            | Cycle sort order                            |
 
@@ -282,6 +284,18 @@ Access `.onion` threat intelligence sources via a Tor SOCKS5 proxy. Configure th
 | `a`            | Select all alerts                           |
 | `d`            | Delete selected alerts                      |
 | `Esc`          | Exit bulk mode                              |
+
+### Articles
+
+| Key            | Action                                      |
+|----------------|---------------------------------------------|
+| `j` / `↓`      | Move selection down                         |
+| `k` / `↑`      | Move selection up                           |
+| `Enter`        | Fetch full text if needed, then open reader |
+| `r`            | Toggle read/unread status                   |
+| `u`            | Toggle unread-only filter                   |
+| `/`            | Filter cached articles                      |
+| `Esc`          | Close article reader                        |
 
 ### Keywords
 
@@ -330,7 +344,7 @@ Access `.onion` threat intelligence sources via a Tor SOCKS5 proxy. Configure th
 ## Architecture Overview
 
 ```
-threatstream-tui/
+ThreatDeck/
 ├── src/
 │   ├── main.rs           # CLI args, terminal setup, main event loop
 │   ├── app.rs            # Application state, screen navigation, key routing

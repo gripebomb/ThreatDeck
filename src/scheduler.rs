@@ -1,5 +1,5 @@
-use std::time::{Duration, Instant};
 use crate::types::Feed;
+use std::time::{Duration, Instant};
 
 pub struct FeedScheduler {
     entries: Vec<ScheduleEntry>,

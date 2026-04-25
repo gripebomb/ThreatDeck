@@ -36,7 +36,7 @@ impl From<&str> for FeedType {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum FeedStatus {
     Healthy,
     Warning,
@@ -55,7 +55,9 @@ impl FeedStatus {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord, Hash, Default)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, PartialOrd, Ord, Hash, Default,
+)]
 pub enum Criticality {
     #[default]
     Low,
@@ -146,6 +148,7 @@ pub enum Screen {
     Dashboard,
     Feeds,
     Alerts,
+    Articles,
     Keywords,
     Tags,
     Logs,
@@ -158,6 +161,7 @@ impl std::fmt::Display for Screen {
             Screen::Dashboard => write!(f, "Dashboard"),
             Screen::Feeds => write!(f, "Feeds"),
             Screen::Alerts => write!(f, "Alerts"),
+            Screen::Articles => write!(f, "Articles"),
             Screen::Keywords => write!(f, "Keywords"),
             Screen::Tags => write!(f, "Tags"),
             Screen::Logs => write!(f, "Logs"),
@@ -250,6 +254,22 @@ pub struct Alert {
 }
 
 #[derive(Debug, Clone)]
+pub struct FeedItem {
+    pub id: i64,
+    pub feed_id: i64,
+    pub title: String,
+    pub url: Option<String>,
+    pub author: Option<String>,
+    pub summary: Option<String>,
+    pub content: Option<String>,
+    pub published_at: Option<DateTime<Utc>>,
+    pub fetched_at: DateTime<Utc>,
+    pub content_hash: String,
+    pub read: bool,
+    pub metadata_json: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct Tag {
     pub id: i64,
     pub name: String,
@@ -295,23 +315,50 @@ pub struct FeedWithTags {
     pub status: FeedStatus,
 }
 
+#[derive(Debug, Clone)]
+pub struct FeedItemWithFeed {
+    pub item: FeedItem,
+    pub feed_name: String,
+}
+
 // ── Feed Engine Structs ─────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
 pub struct FeedResult {
     pub content_hash: String,
-    pub items: Vec<FeedItem>,
+    pub items: Vec<FetchedFeedItem>,
     pub raw_content: String,
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct FeedItem {
+pub struct FetchedFeedItem {
     pub title: Option<String>,
     pub description: Option<String>,
     pub date: Option<DateTime<Utc>>,
     pub url: Option<String>,
     pub source: Option<String>,
     pub raw_json: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewFeedItem {
+    pub feed_id: i64,
+    pub title: String,
+    pub url: Option<String>,
+    pub author: Option<String>,
+    pub summary: Option<String>,
+    pub content: Option<String>,
+    pub published_at: Option<DateTime<Utc>>,
+    pub content_hash: String,
+    pub metadata_json: Option<String>,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct FeedItemFilter {
+    pub text: Option<String>,
+    pub unread_only: bool,
+    pub feed_id: Option<i64>,
+    pub limit: Option<usize>,
 }
 
 // ── Keyword Engine Structs ──────────────────────────────────────────────────
