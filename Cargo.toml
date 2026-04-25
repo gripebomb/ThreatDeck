@@ -6,7 +6,7 @@ description = "Terminal-based threat intelligence monitoring and alerting platfo
 license = "MIT"
 repository = "https://github.com/gripebomb/ThreatDeck"
 keywords = ["threat-intelligence", "tui", "security", "monitoring", "alerts"]
-categories = ["command-line-utilities", "security"]
+categories = ["command-line-utilities", "security", "tui", "CTI", "terminal-based"]
 authors = ["gripebomb"]
 exclude = ["target/", ".git/"]
 
