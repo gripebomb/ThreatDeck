@@ -52,20 +52,12 @@
 
 ## Installation
 
-### From Source (Cargo)
+### Using Cargo
 
 Requires Rust 1.75 or later.
 
 ```bash
-# Clone the repository
-git clone https://github.com/gripebomb/ThreatDeck.git
-cd ThreatDeck
-
-# Build and install
-cargo install --path .
-
-# Or install directly from git
-cargo install --git https://github.com/gripebomb/ThreatDeck.git
+cargo install ThreatDeck
 ```
 
 The binary will be installed as `ThreatDeck` in your Cargo bin directory (usually `~/.cargo/bin/`).
