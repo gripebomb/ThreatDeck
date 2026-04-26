@@ -54,8 +54,6 @@
 
 ### Using Cargo
 
-Requires Rust 1.75 or later.
-
 ```bash
 cargo install ThreatDeck
 ```
