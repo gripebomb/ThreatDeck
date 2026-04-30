@@ -229,7 +229,7 @@ impl Db {
             last_error: row.get(7)?,
             consecutive_failures: row.get::<_, i64>(8)? as u32,
             content_hash: row.get(9)?,
-            created_at: parse_ts(&created).unwrap_or_else(|| Utc::now()),
+            created_at: parse_ts(&created).unwrap_or_else(Utc::now),
             api_template_id: row.get(11)?,
             api_key: row.get(12)?,
             custom_headers: row.get(13)?,
@@ -438,7 +438,7 @@ impl Db {
             "SELECT id, name, jsonpath_title, jsonpath_description, jsonpath_date, jsonpath_url, jsonpath_source, pagination_config, created_at
              FROM api_templates ORDER BY name"
         )?;
-        let rows = stmt.query_map([], |row| Self::row_to_template(row))?;
+        let rows = stmt.query_map([], Self::row_to_template)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
@@ -453,7 +453,7 @@ impl Db {
             jsonpath_url: row.get(5)?,
             jsonpath_source: row.get(6)?,
             pagination_config: row.get(7)?,
-            created_at: parse_ts(&created).unwrap_or_else(|| Utc::now()),
+            created_at: parse_ts(&created).unwrap_or_else(Utc::now),
         })
     }
 
@@ -490,7 +490,7 @@ impl Db {
             "SELECT id, pattern, is_regex, case_sensitive, criticality, enabled, created_at FROM keywords ORDER BY id"
         };
         let mut stmt = self.conn.prepare(sql)?;
-        let rows = stmt.query_map([], |row| Self::row_to_keyword(row))?;
+        let rows = stmt.query_map([], Self::row_to_keyword)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
@@ -539,7 +539,7 @@ impl Db {
             case_sensitive: row.get::<_, i64>(3)? != 0,
             criticality: Criticality::from(criticality_str.as_str()),
             enabled: row.get::<_, i64>(5)? != 0,
-            created_at: parse_ts(&created).unwrap_or_else(|| Utc::now()),
+            created_at: parse_ts(&created).unwrap_or_else(Utc::now),
         })
     }
 
@@ -572,7 +572,7 @@ impl Db {
         let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
         if let Some(crit) = &filter.criticality {
-            conditions.push(format!("a.criticality = '{}'{}", format!("{:?}", crit), ""));
+            conditions.push(format!("a.criticality = '{crit:?}'"));
         }
         if filter.unread_only {
             conditions.push("a.read = 0".to_string());
@@ -746,7 +746,7 @@ impl Db {
             criticality: Criticality::from(criticality_str.as_str()),
             read: row.get::<_, i64>(6)? != 0,
             content_hash: row.get(7)?,
-            detected_at: parse_ts(&detected_str).unwrap_or_else(|| Utc::now()),
+            detected_at: parse_ts(&detected_str).unwrap_or_else(Utc::now),
             metadata_json: row.get(9)?,
         })
     }
@@ -786,7 +786,7 @@ impl Db {
         let mut stmt = self
             .conn
             .prepare("SELECT id, name, color, description, created_at FROM tags ORDER BY name")?;
-        let rows = stmt.query_map([], |row| Self::row_to_tag(row))?;
+        let rows = stmt.query_map([], Self::row_to_tag)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
@@ -808,7 +808,7 @@ impl Db {
             "SELECT t.id, t.name, t.color, t.description, t.created_at
              FROM tags t JOIN feed_tags ft ON t.id = ft.tag_id WHERE ft.feed_id = ?1 ORDER BY t.name"
         )?;
-        let rows = stmt.query_map([feed_id], |row| Self::row_to_tag(row))?;
+        let rows = stmt.query_map([feed_id], Self::row_to_tag)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
@@ -817,7 +817,7 @@ impl Db {
             "SELECT t.id, t.name, t.color, t.description, t.created_at
              FROM tags t JOIN keyword_tags kt ON t.id = kt.tag_id WHERE kt.keyword_id = ?1 ORDER BY t.name"
         )?;
-        let rows = stmt.query_map([keyword_id], |row| Self::row_to_tag(row))?;
+        let rows = stmt.query_map([keyword_id], Self::row_to_tag)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
@@ -826,7 +826,7 @@ impl Db {
             "SELECT t.id, t.name, t.color, t.description, t.created_at
              FROM tags t JOIN alert_tags at ON t.id = at.tag_id WHERE at.alert_id = ?1 ORDER BY t.name"
         )?;
-        let rows = stmt.query_map([alert_id], |row| Self::row_to_tag(row))?;
+        let rows = stmt.query_map([alert_id], Self::row_to_tag)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
@@ -900,7 +900,7 @@ impl Db {
             name: row.get(1)?,
             color: row.get(2)?,
             description: row.get(3)?,
-            created_at: parse_ts(&created).unwrap_or_else(|| Utc::now()),
+            created_at: parse_ts(&created).unwrap_or_else(Utc::now),
         })
     }
 
@@ -925,7 +925,7 @@ impl Db {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, channel, config_json, enabled, min_criticality, created_at FROM notifications ORDER BY name"
         )?;
-        let rows = stmt.query_map([], |row| Self::row_to_notification(row))?;
+        let rows = stmt.query_map([], Self::row_to_notification)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
@@ -967,7 +967,7 @@ impl Db {
             config_json: row.get(3)?,
             enabled: row.get::<_, i64>(4)? != 0,
             min_criticality: Criticality::from(min_crit_str.as_str()),
-            created_at: parse_ts(&created).unwrap_or_else(|| Utc::now()),
+            created_at: parse_ts(&created).unwrap_or_else(Utc::now),
         })
     }
 
@@ -1028,7 +1028,7 @@ impl Db {
             feed_id: row.get(1)?,
             status: FeedStatus::from(status_str.as_str()),
             error_message: row.get(3)?,
-            checked_at: parse_ts(&checked_str).unwrap_or_else(|| Utc::now()),
+            checked_at: parse_ts(&checked_str).unwrap_or_else(Utc::now),
         })
     }
 

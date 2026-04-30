@@ -249,7 +249,7 @@ impl App {
             return;
         }
 
-        if let Some(_) = &self.show_confirm {
+        if self.show_confirm.is_some() {
             match key.code {
                 KeyCode::Char('y') | KeyCode::Char('Y') => self.confirm_action(),
                 KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => self.show_confirm = None,

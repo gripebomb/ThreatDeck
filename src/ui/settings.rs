@@ -130,13 +130,8 @@ fn draw_notifications(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect)
     let rows: Vec<Row> = app
         .settings_notifications
         .iter()
-        .enumerate()
-        .map(|(i, n)| {
-            let style = if i == 0 {
-                Style::default().fg(app.theme.fg)
-            } else {
-                Style::default().fg(app.theme.fg)
-            };
+        .map(|n| {
+            let style = Style::default().fg(app.theme.fg);
             Row::new(vec![
                 Cell::from(n.name.as_str()),
                 Cell::from(format!("{:?}", n.channel)),

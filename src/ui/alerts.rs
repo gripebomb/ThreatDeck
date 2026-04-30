@@ -253,7 +253,7 @@ fn draw_detail(f: &mut Frame, app: &App) {
         .title("Alert Detail - Esc to close")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(app.theme.primary));
-    let lines = vec![
+    let lines = [
         format!(
             "Title: {}",
             alert.alert.title.as_deref().unwrap_or("(untitled)")

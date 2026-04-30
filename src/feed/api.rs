@@ -91,7 +91,7 @@ impl crate::feed::FeedFetcher for ApiFetcher {
                         .or_else(|| item.get("published"))
                         .or_else(|| item.get("discovered"))
                         .or_else(|| item.get("pubDate"))
-                        .and_then(|v| v.as_str().and_then(|s| parse_date(s))),
+                        .and_then(|v| v.as_str().and_then(parse_date)),
                     raw_json: Some(item.to_string()),
                 });
             }

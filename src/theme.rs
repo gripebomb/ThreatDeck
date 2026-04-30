@@ -161,27 +161,6 @@ pub fn get_runtime_theme(name: &str) -> &'static Theme {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn no_color_prefers_plain_theme() {
-        std::env::set_var("NO_COLOR", "1");
-        assert_eq!(get_runtime_theme("dark").name, "plain");
-        std::env::remove_var("NO_COLOR");
-    }
-
-    #[test]
-    fn ansi_theme_uses_terminal_palette_colors() {
-        let theme = get_theme("ansi");
-        assert_eq!(theme.primary, Color::Blue);
-        assert_eq!(theme.success, Color::Green);
-        assert_eq!(theme.warning, Color::Yellow);
-        assert_eq!(theme.error, Color::Red);
-    }
-}
-
 pub fn theme_names() -> Vec<&'static str> {
     THEMES.iter().map(|t| t.name).collect()
 }
@@ -204,4 +183,25 @@ pub fn hex_to_color(hex: &str) -> Color {
     let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(255);
     let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(255);
     Color::Rgb(r, g, b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_color_prefers_plain_theme() {
+        std::env::set_var("NO_COLOR", "1");
+        assert_eq!(get_runtime_theme("dark").name, "plain");
+        std::env::remove_var("NO_COLOR");
+    }
+
+    #[test]
+    fn ansi_theme_uses_terminal_palette_colors() {
+        let theme = get_theme("ansi");
+        assert_eq!(theme.primary, Color::Blue);
+        assert_eq!(theme.success, Color::Green);
+        assert_eq!(theme.warning, Color::Yellow);
+        assert_eq!(theme.error, Color::Red);
+    }
 }

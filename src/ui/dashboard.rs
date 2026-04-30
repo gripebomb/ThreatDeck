@@ -236,9 +236,8 @@ fn draw_trend(f: &mut Frame, app: &App, area: Rect) {
 }
 
 pub fn handle_key(app: &mut App, key: KeyEvent) {
-    match key.code {
-        KeyCode::Char('r') => app.refresh_dashboard(),
-        _ => {}
+    if let KeyCode::Char('r') = key.code {
+        app.refresh_dashboard();
     }
 }
 

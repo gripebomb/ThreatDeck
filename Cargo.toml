@@ -1,6 +1,6 @@
 [package]
 name = "ThreatDeck"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Terminal-based threat intelligence monitoring and alerting platform"
 license = "MIT"
@@ -30,7 +30,15 @@ jsonpath_lib = "0.3"
 regex = "1"
 sha2 = "0.10"
 hex = "0.4"
-lettre = { version = "0.11", default-features = false, features = ["tokio1", "smtp-transport", "rustls-tls", "tokio1-rustls-tls", "builder", "hostname", "pool"] }
+lettre = { version = "0.11", default-features = false, features = [
+  "tokio1",
+  "smtp-transport",
+  "rustls-tls",
+  "tokio1-rustls-tls",
+  "builder",
+  "hostname",
+  "pool",
+] }
 chrono = { version = "0.4", features = ["serde"] }
 tokio = { version = "1", features = ["rt-multi-thread", "time", "sync"] }
 scraper = "0.22"

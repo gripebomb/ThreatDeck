@@ -562,10 +562,7 @@ fn submit_keyword_form(app: &mut App) {
 }
 
 fn handle_test_key(app: &mut App, key: KeyEvent) {
-    match key.code {
-        KeyCode::Esc => {
-            app.keywords_test_mode = false;
-        }
-        _ => {}
+    if key.code == KeyCode::Esc {
+        app.keywords_test_mode = false;
     }
 }
