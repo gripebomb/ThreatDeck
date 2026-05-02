@@ -12,6 +12,10 @@
 
 ---
 
+## Demo
+
+<img src="demo.gif" alt="ThreatDeck demo GIF" width="100%">
+
 ## Dashboard Preview
 
 <img width="1077" height="838" alt="image" src="https://github.com/user-attachments/assets/3702b588-3c64-42db-a20a-9d8643f74204" />
