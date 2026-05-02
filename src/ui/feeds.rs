@@ -5,7 +5,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
-    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table},
+    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState},
     Frame,
 };
 
@@ -48,16 +48,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             .fg(app.theme.primary),
     );
 
+    let mut table_state = TableState::default();
+    table_state.select(Some(app.feeds_selected));
+
     let rows: Vec<Row> = app
         .feeds_list
         .iter()
-        .enumerate()
-        .map(|(i, ft)| {
-            let style = if i == app.feeds_selected {
-                selected_style()
-            } else {
-                Style::default().fg(app.theme.fg)
-            };
+        .map(|ft| {
+            let style = Style::default().fg(app.theme.fg);
             let status_color = match ft.status {
                 crate::types::FeedStatus::Healthy => app.theme.success,
                 crate::types::FeedStatus::Warning => app.theme.warning,
@@ -111,8 +109,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(app.theme.border)),
-    );
-    f.render_widget(table, chunks[1]);
+    )
+    .highlight_style(selected_style());
+    f.render_stateful_widget(table, chunks[1], &mut table_state);
 
     let status_text = if app.input_mode == InputMode::Typing {
         "-- INSERT -- Type to enter text | [Enter] Save | [Esc] Stop typing".to_string()

@@ -4,7 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Modifier, Style},
-    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table},
+    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState},
     Frame,
 };
 
@@ -45,16 +45,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             .fg(app.theme.primary),
     );
 
+    let mut table_state = TableState::default();
+    table_state.select(Some(app.tags_selected));
+
     let rows: Vec<Row> = app
         .tags_list
         .iter()
-        .enumerate()
-        .map(|(i, t)| {
-            let style = if i == app.tags_selected {
-                selected_style()
-            } else {
-                Style::default().fg(app.theme.fg)
-            };
+        .map(|t| {
+            let style = Style::default().fg(app.theme.fg);
             let color = crate::theme::hex_to_color(&t.color);
             Row::new(vec![
                 Cell::from(t.name.as_str()).style(Style::default().add_modifier(Modifier::BOLD)),
@@ -86,8 +84,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(app.theme.border)),
-    );
-    f.render_widget(table, chunks[1]);
+    )
+    .highlight_style(selected_style());
+    f.render_stateful_widget(table, chunks[1], &mut table_state);
 
     let status_text = if app.tags_show_form && app.input_mode == InputMode::Typing {
         "-- INSERT -- Type to enter text | [Enter] Save | [Esc] Stop typing".to_string()

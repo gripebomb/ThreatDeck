@@ -4,7 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Modifier, Style},
-    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table},
+    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState},
     Frame,
 };
 
@@ -59,16 +59,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             .fg(app.theme.primary),
     );
 
+    let mut table_state = TableState::default();
+    table_state.select(Some(app.alerts_selected));
+
     let rows: Vec<Row> = app
         .alerts_list
         .iter()
-        .enumerate()
-        .map(|(i, a)| {
-            let style = if i == app.alerts_selected {
-                selected_style()
-            } else {
-                Style::default().fg(app.theme.fg)
-            };
+        .map(|a| {
+            let style = Style::default().fg(app.theme.fg);
             let read_mark = if a.alert.read { "○" } else { "●" };
             let crit_color = crate::theme::criticality_color(app.theme, a.alert.criticality);
             let crit_str = criticality_label(a.alert.criticality);
@@ -116,8 +114,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(app.theme.border)),
-    );
-    f.render_widget(table, chunks[1]);
+    )
+    .highlight_style(selected_style());
+    f.render_stateful_widget(table, chunks[1], &mut table_state);
 
     let status_text = if app.filter_active {
         "-- FILTER -- Type search | [Enter] Keep | [Esc] Clear"

@@ -5,7 +5,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Text},
-    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, Wrap},
+    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState, Wrap},
     Frame,
 };
 
@@ -55,16 +55,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             .add_modifier(Modifier::BOLD)
             .fg(app.theme.primary),
     );
+    let mut table_state = TableState::default();
+    table_state.select(Some(app.articles_selected));
+
     let rows: Vec<Row> = app
         .articles_list
         .iter()
-        .enumerate()
-        .map(|(i, article)| {
-            let style = if i == app.articles_selected {
-                selected_style()
-            } else {
-                Style::default().fg(app.theme.fg)
-            };
+        .map(|article| {
+            let style = Style::default().fg(app.theme.fg);
             let read_mark = if article.item.read { "○" } else { "●" };
             let published = article
                 .item
@@ -100,8 +98,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(app.theme.border)),
-    );
-    f.render_widget(table, chunks[1]);
+    )
+    .highlight_style(selected_style());
+    f.render_stateful_widget(table, chunks[1], &mut table_state);
 
     let status_text = if app.filter_active {
         "-- FILTER -- Type search | [Enter] Keep | [Esc] Clear"

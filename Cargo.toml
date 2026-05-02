@@ -1,6 +1,6 @@
 [package]
 name = "ThreatDeck"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "Terminal-based threat intelligence monitoring and alerting platform"
 license = "MIT"
