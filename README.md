@@ -451,6 +451,17 @@ The application uses the following SQLite schema (see `src/schema.sql`):
 - **notifications** — Notification channel configurations
 - **feed_health_logs** — Per-feed health status history
 
+## Upcoming Features
+
+- IOC extraction and enrichment
+- Terminal-native case management
+- Watchlists for organizations/domains/VIPs
+- Threat actor profiles
+- Rule testing against historical content
+- Markdown report export
+- Command palette
+- Local LLM alert summaries
+
 ## License
 
 This project is licensed under the [MIT License](LICENSE).
