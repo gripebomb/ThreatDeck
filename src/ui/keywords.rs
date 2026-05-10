@@ -481,10 +481,8 @@ fn handle_form_normal_mode(app: &mut App, key: KeyEvent) {
 fn handle_form_typing_mode(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Enter => submit_keyword_form(app),
-        KeyCode::Backspace => {
-            if app.form_focus == 0 {
-                app.keywords_form.pattern.pop();
-            }
+        KeyCode::Backspace if app.form_focus == 0 => {
+            app.keywords_form.pattern.pop();
         }
         KeyCode::Char(c) if app.form_focus == 0 => {
             app.keywords_form.pattern.push(c);

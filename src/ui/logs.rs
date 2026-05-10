@@ -127,15 +127,13 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
     }
 
     match key.code {
-        KeyCode::Char('f') => {
-            if !app.feeds_list.is_empty() {
-                let current = app
-                    .logs_filter_feed
-                    .and_then(|id| app.feeds_list.iter().position(|ft| ft.feed.id == id));
-                let next = current.map(|i| (i + 1) % app.feeds_list.len()).unwrap_or(0);
-                app.logs_filter_feed = Some(app.feeds_list[next].feed.id);
-                app.refresh_logs();
-            }
+        KeyCode::Char('f') if !app.feeds_list.is_empty() => {
+            let current = app
+                .logs_filter_feed
+                .and_then(|id| app.feeds_list.iter().position(|ft| ft.feed.id == id));
+            let next = current.map(|i| (i + 1) % app.feeds_list.len()).unwrap_or(0);
+            app.logs_filter_feed = Some(app.feeds_list[next].feed.id);
+            app.refresh_logs();
         }
         KeyCode::Char('c') => {
             app.logs_filter_feed = None;

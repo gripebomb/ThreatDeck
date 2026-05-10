@@ -221,12 +221,10 @@ fn handle_bulk_key(app: &mut App, key: KeyEvent) {
                 app.alerts_selected_bulk.insert(a.alert.id);
             }
         }
-        KeyCode::Char('d') => {
-            if !app.alerts_selected_bulk.is_empty() {
-                app.show_confirm = Some(crate::types::ConfirmDialog::BulkDeleteAlerts {
-                    count: app.alerts_selected_bulk.len(),
-                });
-            }
+        KeyCode::Char('d') if !app.alerts_selected_bulk.is_empty() => {
+            app.show_confirm = Some(crate::types::ConfirmDialog::BulkDeleteAlerts {
+                count: app.alerts_selected_bulk.len(),
+            });
         }
         KeyCode::Esc => {
             app.alerts_bulk_mode = false;

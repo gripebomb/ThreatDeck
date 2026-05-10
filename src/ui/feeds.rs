@@ -560,13 +560,11 @@ fn append_to_feed_field(app: &mut App, c: char) {
     match app.form_focus {
         0 => app.feeds_form.name.push(c),
         1 => app.feeds_form.url.push(c),
-        2 => {
-            // interval_secs: only digits, build the number
-            if c.is_ascii_digit() {
-                let current = app.feeds_form.interval_secs;
-                let digit = c.to_digit(10).unwrap_or(0) as u64;
-                app.feeds_form.interval_secs = current.saturating_mul(10).saturating_add(digit);
-            }
+        // interval_secs: only digits, build the number
+        2 if c.is_ascii_digit() => {
+            let current = app.feeds_form.interval_secs;
+            let digit = c.to_digit(10).unwrap_or(0) as u64;
+            app.feeds_form.interval_secs = current.saturating_mul(10).saturating_add(digit);
         }
         3 => app.feeds_form.api_key.push(c),
         4 => app.feeds_form.custom_headers.push(c),
