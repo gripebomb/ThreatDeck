@@ -1,7 +1,9 @@
 pub mod alerts;
 pub mod articles;
 pub mod dashboard;
+pub mod enrichment_queue;
 pub mod feeds;
+pub mod indicators;
 pub mod keywords;
 pub mod list;
 pub mod logs;
@@ -36,6 +38,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         crate::types::Screen::Feeds => feeds::draw(f, app),
         crate::types::Screen::Alerts => alerts::draw(f, app),
         crate::types::Screen::Articles => articles::draw(f, app),
+        crate::types::Screen::Indicators => indicators::draw(f, app),
+        crate::types::Screen::EnrichmentQueue => enrichment_queue::draw(f, app),
         crate::types::Screen::Keywords => keywords::draw(f, app),
         crate::types::Screen::Tags => tags::draw(f, app),
         crate::types::Screen::Logs => logs::draw(f, app),
@@ -93,7 +97,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             .border_style(ratatui::style::Style::default().fg(app.theme.primary));
         let text = ratatui::text::Text::from(vec![
             ratatui::text::Line::from("Global Keys:"),
-            ratatui::text::Line::from("  1-8        Switch screens (Dashboard, Feeds, Alerts, Articles, Keywords, Tags, Logs, Settings)"),
+            ratatui::text::Line::from("  1-9,0      Switch screens (Dashboard, Feeds, Alerts, Articles, Indicators, Enrichment, Keywords, Tags, Logs, Settings)"),
             ratatui::text::Line::from("  q          Quit"),
             ratatui::text::Line::from("  /          Filter current list"),
             ratatui::text::Line::from("  gg / G     Jump to top / bottom"),
@@ -187,20 +191,24 @@ fn draw_nav_tabs(f: &mut Frame, app: &App) {
         "[2] Feeds",
         "[3] Alerts",
         "[4] Articles",
-        "[5] Keywords",
-        "[6] Tags",
-        "[7] Logs",
-        "[8] Settings",
+        "[5] Indicators",
+        "[6] Enrich",
+        "[7] Keywords",
+        "[8] Tags",
+        "[9] Logs",
+        "[0] Settings",
     ];
     let selected = match app.screen {
         crate::types::Screen::Dashboard => 0,
         crate::types::Screen::Feeds => 1,
         crate::types::Screen::Alerts => 2,
         crate::types::Screen::Articles => 3,
-        crate::types::Screen::Keywords => 4,
-        crate::types::Screen::Tags => 5,
-        crate::types::Screen::Logs => 6,
-        crate::types::Screen::Settings => 7,
+        crate::types::Screen::Indicators => 4,
+        crate::types::Screen::EnrichmentQueue => 5,
+        crate::types::Screen::Keywords => 6,
+        crate::types::Screen::Tags => 7,
+        crate::types::Screen::Logs => 8,
+        crate::types::Screen::Settings => 9,
     };
     let tabs = Tabs::new(titles)
         .select(selected)

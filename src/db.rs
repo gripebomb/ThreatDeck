@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
+use sentinel_ioc::{ExtractedIndicator, IndicatorType};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::path::Path;
@@ -25,6 +26,85 @@ fn parse_db_datetime(s: &str) -> Option<DateTime<Utc>> {
         .or_else(|| parse_ts(s))
 }
 
+fn indicator_type_to_db(indicator_type: IndicatorType) -> &'static str {
+    match indicator_type {
+        IndicatorType::Ipv4 => "Ipv4",
+        IndicatorType::Ipv6 => "Ipv6",
+        IndicatorType::Domain => "Domain",
+        IndicatorType::Url => "Url",
+        IndicatorType::Email => "Email",
+        IndicatorType::Md5 => "Md5",
+        IndicatorType::Sha1 => "Sha1",
+        IndicatorType::Sha256 => "Sha256",
+        IndicatorType::Cve => "Cve",
+        IndicatorType::MitreAttackTechnique => "MitreAttackTechnique",
+        IndicatorType::OnionDomain => "OnionDomain",
+        IndicatorType::OnionUrl => "OnionUrl",
+        IndicatorType::CryptoWallet => "CryptoWallet",
+        IndicatorType::CloudAccessKey => "CloudAccessKey",
+        IndicatorType::Unknown => "Unknown",
+    }
+}
+
+fn indicator_type_from_db(value: &str) -> IndicatorType {
+    match value {
+        "Ipv4" => IndicatorType::Ipv4,
+        "Ipv6" => IndicatorType::Ipv6,
+        "Domain" => IndicatorType::Domain,
+        "Url" => IndicatorType::Url,
+        "Email" => IndicatorType::Email,
+        "Md5" => IndicatorType::Md5,
+        "Sha1" => IndicatorType::Sha1,
+        "Sha256" => IndicatorType::Sha256,
+        "Cve" => IndicatorType::Cve,
+        "MitreAttackTechnique" => IndicatorType::MitreAttackTechnique,
+        "OnionDomain" => IndicatorType::OnionDomain,
+        "OnionUrl" => IndicatorType::OnionUrl,
+        "CryptoWallet" => IndicatorType::CryptoWallet,
+        "CloudAccessKey" => IndicatorType::CloudAccessKey,
+        _ => IndicatorType::Unknown,
+    }
+}
+
+fn indicator_types_to_json(types: &[IndicatorType]) -> Result<String> {
+    let values = types
+        .iter()
+        .map(|indicator_type| indicator_type_to_db(*indicator_type))
+        .collect::<Vec<_>>();
+    serde_json::to_string(&values).map_err(Into::into)
+}
+
+fn indicator_types_from_json(value: &str) -> Vec<IndicatorType> {
+    serde_json::from_str::<Vec<String>>(value)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|value| indicator_type_from_db(&value))
+        .collect()
+}
+
+fn risk_score_from_enrichment(result: &sentinel_enrichment::EnrichmentResult) -> Option<i64> {
+    if let Some(score) = result.score {
+        return Some(i64::from(score).clamp(0, 100));
+    }
+
+    let verdict = result.verdict.as_deref().unwrap_or("").to_ascii_lowercase();
+    if verdict.contains("known exploited") {
+        return Some(90);
+    }
+
+    match result.reputation {
+        sentinel_enrichment::Reputation::KnownRansomware
+        | sentinel_enrichment::Reputation::KnownC2
+        | sentinel_enrichment::Reputation::KnownMalware
+        | sentinel_enrichment::Reputation::KnownPhishing
+        | sentinel_enrichment::Reputation::Malicious => Some(85),
+        sentinel_enrichment::Reputation::Suspicious => Some(60),
+        sentinel_enrichment::Reputation::KnownScanner => Some(25),
+        sentinel_enrichment::Reputation::Benign => Some(10),
+        sentinel_enrichment::Reputation::Unknown => None,
+    }
+}
+
 fn feed_item_hash(feed: &Feed, item: &FetchedFeedItem) -> String {
     let hash_input = format!(
         "{}:{}:{}:{}:{}:{}",
@@ -41,6 +121,13 @@ fn feed_item_hash(feed: &Feed, item: &FetchedFeedItem) -> String {
 }
 
 impl Db {
+    #[cfg(test)]
+    pub fn new_in_memory_for_tests() -> Self {
+        Self {
+            conn: Connection::open_in_memory().unwrap(),
+        }
+    }
+
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)
             .with_context(|| format!("opening database at {}", path.display()))?;
@@ -52,6 +139,7 @@ impl Db {
         self.conn.execute_batch(include_str!("schema.sql"))?;
         let first_run = self.is_first_run_database()?;
         self.apply_catalog_updates()?;
+        self.ensure_builtin_enrichment_providers()?;
         if first_run {
             self.conn.execute_batch(include_str!("seed.sql"))?;
         }
@@ -97,6 +185,19 @@ impl Db {
             .conn
             .query_row("SELECT COUNT(*) FROM alerts", [], |row| row.get(0))?;
         Ok(feed_count == 0 && keyword_count == 0 && alert_count == 0)
+    }
+
+    fn ensure_builtin_enrichment_providers(&self) -> Result<()> {
+        self.create_enrichment_provider(&EnrichmentProviderCreate {
+            name: "cisa-kev".into(),
+            provider_type: "cisa_kev".into(),
+            enabled: true,
+            config_json: None,
+            secret_ref: None,
+            rate_limit_per_minute: None,
+            supports_types: vec![IndicatorType::Cve],
+        })?;
+        Ok(())
     }
 
     // ── Feeds ─────────────────────────────────────────────────────────────
@@ -343,7 +444,19 @@ impl Db {
     }
 
     pub fn store_feed_result_items(&self, feed: &Feed, result: &FeedResult) -> Result<usize> {
-        let mut inserted = 0;
+        Ok(self
+            .store_feed_result_items_with_ids(feed, result)?
+            .into_iter()
+            .filter(|stored| stored.inserted)
+            .count())
+    }
+
+    pub fn store_feed_result_items_with_ids(
+        &self,
+        feed: &Feed,
+        result: &FeedResult,
+    ) -> Result<Vec<StoredFeedItem>> {
+        let mut stored_items = Vec::with_capacity(result.items.len());
         for item in &result.items {
             let new_item = NewFeedItem {
                 feed_id: feed.id,
@@ -369,12 +482,13 @@ impl Db {
                 )
                 .optional()?
                 .is_some();
-            self.upsert_feed_item(&new_item)?;
-            if !existed {
-                inserted += 1;
-            }
+            let id = self.upsert_feed_item(&new_item)?;
+            stored_items.push(StoredFeedItem {
+                id,
+                inserted: !existed,
+            });
         }
-        Ok(inserted)
+        Ok(stored_items)
     }
 
     fn row_to_feed_item_with_feed(row: &rusqlite::Row) -> rusqlite::Result<FeedItemWithFeed> {
@@ -760,6 +874,678 @@ impl Db {
             feed_name,
             keyword_pattern,
             tags: Vec::new(), // populated separately if needed
+        })
+    }
+
+    // ── Indicators ────────────────────────────────────────────────────────
+
+    pub fn upsert_indicator(&self, indicator: &ExtractedIndicator) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO indicators
+                (indicator_type, value, normalized_value, confidence_score)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(indicator_type, normalized_value) DO UPDATE SET
+                value = excluded.value,
+                last_seen_at = CURRENT_TIMESTAMP,
+                sighting_count = sighting_count + 1,
+                confidence_score = COALESCE(excluded.confidence_score, confidence_score),
+                updated_at = CURRENT_TIMESTAMP",
+            params![
+                indicator_type_to_db(indicator.indicator_type),
+                indicator.value,
+                indicator.normalized_value,
+                indicator.confidence_hint.map(i64::from),
+            ],
+        )?;
+
+        self.conn
+            .query_row(
+                "SELECT id FROM indicators WHERE indicator_type = ?1 AND normalized_value = ?2",
+                params![
+                    indicator_type_to_db(indicator.indicator_type),
+                    indicator.normalized_value
+                ],
+                |row| row.get(0),
+            )
+            .map_err(Into::into)
+    }
+
+    pub fn insert_indicator_occurrence(
+        &self,
+        occurrence: &IndicatorOccurrenceCreate,
+    ) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO indicator_occurrences
+                (indicator_id, content_item_id, alert_id, feed_id, source_field, start_offset, end_offset, surrounding_text)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                occurrence.indicator_id,
+                occurrence.content_item_id,
+                occurrence.alert_id,
+                occurrence.feed_id,
+                occurrence.source_field,
+                occurrence.start_offset,
+                occurrence.end_offset,
+                occurrence.surrounding_text,
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn link_indicator_to_alert(&self, alert_id: i64, indicator_id: i64) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO alert_indicators (alert_id, indicator_id, relationship)
+             VALUES (?1, ?2, 'observed')",
+            params![alert_id, indicator_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn store_extracted_indicators(
+        &self,
+        indicators: &[ExtractedIndicator],
+        alert_id: Option<i64>,
+        content_item_id: Option<i64>,
+        feed_id: Option<i64>,
+    ) -> Result<Vec<i64>> {
+        let mut ids = Vec::with_capacity(indicators.len());
+        for indicator in indicators {
+            let indicator_id = self.upsert_indicator(indicator)?;
+            self.insert_indicator_occurrence(&IndicatorOccurrenceCreate {
+                indicator_id,
+                content_item_id,
+                alert_id,
+                feed_id,
+                source_field: Some(indicator.source_field.clone()),
+                start_offset: Some(indicator.start_offset as i64),
+                end_offset: Some(indicator.end_offset as i64),
+                surrounding_text: Some(indicator.surrounding_text.clone()),
+            })?;
+            if let Some(alert_id) = alert_id {
+                self.link_indicator_to_alert(alert_id, indicator_id)?;
+            }
+            ids.push(indicator_id);
+        }
+        Ok(ids)
+    }
+
+    pub fn list_indicators_for_alert(&self, alert_id: i64) -> Result<Vec<IndicatorRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT i.id, i.indicator_type, i.value, i.normalized_value, i.first_seen_at,
+                    i.last_seen_at, i.sighting_count, i.confidence_score, i.risk_score,
+                    i.metadata_json, i.created_at, i.updated_at
+             FROM indicators i
+             JOIN alert_indicators ai ON ai.indicator_id = i.id
+             WHERE ai.alert_id = ?1
+             ORDER BY i.indicator_type, i.normalized_value",
+        )?;
+        let rows = stmt.query_map([alert_id], Self::row_to_indicator)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn list_indicators_for_content_item(
+        &self,
+        content_item_id: i64,
+    ) -> Result<Vec<IndicatorRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT i.id, i.indicator_type, i.value, i.normalized_value, i.first_seen_at,
+                    i.last_seen_at, i.sighting_count, i.confidence_score, i.risk_score,
+                    i.metadata_json, i.created_at, i.updated_at
+             FROM indicators i
+             JOIN indicator_occurrences io ON io.indicator_id = i.id
+             WHERE io.content_item_id = ?1
+             ORDER BY i.indicator_type, i.normalized_value",
+        )?;
+        let rows = stmt.query_map([content_item_id], Self::row_to_indicator)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn get_indicator_detail(&self, id: i64) -> Result<Option<IndicatorDetail>> {
+        let indicator = self.get_indicator(id)?;
+        let Some(indicator) = indicator else {
+            return Ok(None);
+        };
+        let occurrences = self.list_indicator_occurrences(id)?;
+        Ok(Some(IndicatorDetail {
+            indicator,
+            occurrences,
+        }))
+    }
+
+    pub fn search_indicators(&self, search: &IndicatorSearch) -> Result<Vec<IndicatorRecord>> {
+        let mut sql = "SELECT id, indicator_type, value, normalized_value, first_seen_at,
+                    last_seen_at, sighting_count, confidence_score, risk_score,
+                    metadata_json, created_at, updated_at
+             FROM indicators"
+            .to_string();
+        let mut conditions = Vec::new();
+        let mut values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+
+        if let Some(indicator_type) = search.indicator_type {
+            conditions.push("indicator_type = ?".to_string());
+            values.push(Box::new(indicator_type_to_db(indicator_type).to_string()));
+        }
+        if let Some(text) = &search.text {
+            if !text.is_empty() {
+                conditions.push("(value LIKE ? OR normalized_value LIKE ?)".to_string());
+                let like = format!("%{text}%");
+                values.push(Box::new(like.clone()));
+                values.push(Box::new(like));
+            }
+        }
+
+        if !conditions.is_empty() {
+            sql.push_str(" WHERE ");
+            sql.push_str(&conditions.join(" AND "));
+        }
+        sql.push_str(" ORDER BY last_seen_at DESC, id DESC LIMIT ?");
+        values.push(Box::new(search.limit.unwrap_or(500)));
+
+        let params = values
+            .iter()
+            .map(|value| value.as_ref())
+            .collect::<Vec<&dyn rusqlite::ToSql>>();
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params.as_slice(), Self::row_to_indicator)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn get_indicator(&self, id: i64) -> Result<Option<IndicatorRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, indicator_type, value, normalized_value, first_seen_at,
+                    last_seen_at, sighting_count, confidence_score, risk_score,
+                    metadata_json, created_at, updated_at
+             FROM indicators WHERE id = ?1",
+        )?;
+        stmt.query_row([id], Self::row_to_indicator)
+            .optional()
+            .map_err(Into::into)
+    }
+
+    fn list_indicator_occurrences(&self, indicator_id: i64) -> Result<Vec<IndicatorOccurrence>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, indicator_id, content_item_id, alert_id, feed_id, source_field,
+                    start_offset, end_offset, surrounding_text, detected_at
+             FROM indicator_occurrences
+             WHERE indicator_id = ?1
+             ORDER BY detected_at DESC, id DESC",
+        )?;
+        let rows = stmt.query_map([indicator_id], Self::row_to_indicator_occurrence)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    fn row_to_indicator(row: &rusqlite::Row) -> rusqlite::Result<IndicatorRecord> {
+        let indicator_type: String = row.get(1)?;
+        let first_seen_at: String = row.get(4)?;
+        let last_seen_at: String = row.get(5)?;
+        let created_at: String = row.get(10)?;
+        let updated_at: String = row.get(11)?;
+        Ok(IndicatorRecord {
+            id: row.get(0)?,
+            indicator_type: indicator_type_from_db(&indicator_type),
+            value: row.get(2)?,
+            normalized_value: row.get(3)?,
+            first_seen_at: parse_db_datetime(&first_seen_at).unwrap_or_else(Utc::now),
+            last_seen_at: parse_db_datetime(&last_seen_at).unwrap_or_else(Utc::now),
+            sighting_count: row.get::<_, i64>(6)?,
+            confidence_score: row.get(7)?,
+            risk_score: row.get(8)?,
+            metadata_json: row.get(9)?,
+            created_at: parse_db_datetime(&created_at).unwrap_or_else(Utc::now),
+            updated_at: parse_db_datetime(&updated_at).unwrap_or_else(Utc::now),
+        })
+    }
+
+    fn row_to_indicator_occurrence(row: &rusqlite::Row) -> rusqlite::Result<IndicatorOccurrence> {
+        let detected_at: String = row.get(9)?;
+        Ok(IndicatorOccurrence {
+            id: row.get(0)?,
+            indicator_id: row.get(1)?,
+            content_item_id: row.get(2)?,
+            alert_id: row.get(3)?,
+            feed_id: row.get(4)?,
+            source_field: row.get(5)?,
+            start_offset: row.get(6)?,
+            end_offset: row.get(7)?,
+            surrounding_text: row.get(8)?,
+            detected_at: parse_db_datetime(&detected_at).unwrap_or_else(Utc::now),
+        })
+    }
+
+    // ── Enrichment ────────────────────────────────────────────────────────
+
+    pub fn create_enrichment_provider(&self, provider: &EnrichmentProviderCreate) -> Result<i64> {
+        let supports_types_json = indicator_types_to_json(&provider.supports_types)?;
+        self.conn.execute(
+            "INSERT INTO enrichment_providers
+                (name, provider_type, enabled, config_json, secret_ref, rate_limit_per_minute, supports_types_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(name) DO UPDATE SET
+                provider_type = excluded.provider_type,
+                enabled = excluded.enabled,
+                config_json = excluded.config_json,
+                secret_ref = excluded.secret_ref,
+                rate_limit_per_minute = excluded.rate_limit_per_minute,
+                supports_types_json = excluded.supports_types_json,
+                updated_at = CURRENT_TIMESTAMP",
+            params![
+                provider.name,
+                provider.provider_type,
+                provider.enabled as i64,
+                provider.config_json,
+                provider.secret_ref,
+                provider.rate_limit_per_minute.map(i64::from),
+                supports_types_json,
+            ],
+        )?;
+        self.conn
+            .query_row(
+                "SELECT id FROM enrichment_providers WHERE name = ?1",
+                [provider.name.as_str()],
+                |row| row.get(0),
+            )
+            .map_err(Into::into)
+    }
+
+    pub fn update_enrichment_provider(&self, provider: &EnrichmentProviderUpdate) -> Result<()> {
+        let supports_types_json = provider
+            .supports_types
+            .as_ref()
+            .map(|types| indicator_types_to_json(types))
+            .transpose()?;
+        self.conn.execute(
+            "UPDATE enrichment_providers SET
+                enabled = COALESCE(?1, enabled),
+                config_json = COALESCE(?2, config_json),
+                secret_ref = COALESCE(?3, secret_ref),
+                rate_limit_per_minute = COALESCE(?4, rate_limit_per_minute),
+                supports_types_json = COALESCE(?5, supports_types_json),
+                updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?6",
+            params![
+                provider.enabled.map(|enabled| enabled as i64),
+                provider.config_json,
+                provider.secret_ref,
+                provider.rate_limit_per_minute.map(i64::from),
+                supports_types_json,
+                provider.id,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_enabled_enrichment_providers(&self) -> Result<Vec<EnrichmentProviderRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, provider_type, enabled, config_json, secret_ref,
+                    rate_limit_per_minute, supports_types_json, created_at, updated_at
+             FROM enrichment_providers
+             WHERE enabled = 1
+             ORDER BY name",
+        )?;
+        let rows = stmt.query_map([], Self::row_to_enrichment_provider)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn list_enrichment_providers(&self) -> Result<Vec<EnrichmentProviderRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, provider_type, enabled, config_json, secret_ref,
+                    rate_limit_per_minute, supports_types_json, created_at, updated_at
+             FROM enrichment_providers
+             ORDER BY name",
+        )?;
+        let rows = stmt.query_map([], Self::row_to_enrichment_provider)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn set_enrichment_provider_enabled(&self, name: &str, enabled: bool) -> Result<()> {
+        self.conn.execute(
+            "UPDATE enrichment_providers SET enabled = ?1, updated_at = CURRENT_TIMESTAMP WHERE name = ?2",
+            params![enabled as i64, name],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_enrichment_provider(&self, id: i64) -> Result<Option<EnrichmentProviderRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, provider_type, enabled, config_json, secret_ref,
+                    rate_limit_per_minute, supports_types_json, created_at, updated_at
+             FROM enrichment_providers
+             WHERE id = ?1",
+        )?;
+        stmt.query_row([id], Self::row_to_enrichment_provider)
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn queue_enrichment_job(
+        &self,
+        indicator_id: i64,
+        provider_id: i64,
+        priority: i64,
+    ) -> Result<i64> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO enrichment_jobs
+                (indicator_id, provider_id, status, priority)
+             VALUES (?1, ?2, 'pending', ?3)",
+            params![indicator_id, provider_id, priority],
+        )?;
+        self.conn
+            .query_row(
+                "SELECT id FROM enrichment_jobs WHERE indicator_id = ?1 AND provider_id = ?2",
+                params![indicator_id, provider_id],
+                |row| row.get(0),
+            )
+            .map_err(Into::into)
+    }
+
+    pub fn queue_enrichment_jobs_for_indicators(&self, indicator_ids: &[i64]) -> Result<Vec<i64>> {
+        let providers = self.list_enabled_enrichment_providers()?;
+        let mut queued = Vec::new();
+        for indicator_id in indicator_ids {
+            let Some(indicator) = self.get_indicator(*indicator_id)? else {
+                continue;
+            };
+            for provider in &providers {
+                if !provider.supports_types.contains(&indicator.indicator_type) {
+                    continue;
+                }
+                if self.has_fresh_enrichment_result(*indicator_id, provider.id)? {
+                    continue;
+                }
+                queued.push(self.queue_enrichment_job(*indicator_id, provider.id, 100)?);
+            }
+        }
+        Ok(queued)
+    }
+
+    pub fn has_fresh_enrichment_result(&self, indicator_id: i64, provider_id: i64) -> Result<bool> {
+        let exists = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM enrichment_results
+                 WHERE indicator_id = ?1
+                   AND provider_id = ?2
+                   AND status = 'succeeded'
+                   AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+                 LIMIT 1",
+                params![indicator_id, provider_id],
+                |_row| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        Ok(exists)
+    }
+
+    pub fn claim_next_enrichment_jobs(&self, limit: i64) -> Result<Vec<EnrichmentJobRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id FROM enrichment_jobs
+             WHERE status IN ('pending', 'retrying', 'rate_limited') AND next_attempt_at <= CURRENT_TIMESTAMP
+             ORDER BY priority ASC, created_at ASC
+             LIMIT ?1",
+        )?;
+        let job_ids = stmt
+            .query_map([limit], |row| row.get::<_, i64>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+
+        for job_id in &job_ids {
+            self.conn.execute(
+                "UPDATE enrichment_jobs SET
+                    status = 'running',
+                    last_attempt_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                 WHERE id = ?1",
+                [job_id],
+            )?;
+        }
+
+        let mut claimed = Vec::with_capacity(job_ids.len());
+        for job_id in job_ids {
+            if let Some(job) = self.get_enrichment_job(job_id)? {
+                claimed.push(job);
+            }
+        }
+        Ok(claimed)
+    }
+
+    pub fn mark_enrichment_job_succeeded(&self, job_id: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE enrichment_jobs SET
+                status = 'succeeded',
+                error_message = NULL,
+                updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?1",
+            [job_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn mark_enrichment_job_failed(
+        &self,
+        job_id: i64,
+        error_message: &str,
+        retry: bool,
+    ) -> Result<()> {
+        let status = if retry { "retrying" } else { "failed" };
+        let next_attempt = if retry {
+            "datetime(CURRENT_TIMESTAMP, '+5 minutes')"
+        } else {
+            "CURRENT_TIMESTAMP"
+        };
+        let sql = format!(
+            "UPDATE enrichment_jobs SET
+                status = ?1,
+                attempt_count = attempt_count + 1,
+                next_attempt_at = {next_attempt},
+                error_message = ?2,
+                updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?3"
+        );
+        self.conn
+            .execute(&sql, params![status, error_message, job_id])?;
+        Ok(())
+    }
+
+    pub fn mark_enrichment_job_rate_limited(&self, job_id: i64, error_message: &str) -> Result<()> {
+        self.conn.execute(
+            "UPDATE enrichment_jobs SET
+                status = 'rate_limited',
+                next_attempt_at = datetime(CURRENT_TIMESTAMP, '+1 minutes'),
+                error_message = ?1,
+                updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?2",
+            params![error_message, job_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn store_enrichment_result(
+        &self,
+        indicator_id: i64,
+        provider_id: i64,
+        result: &sentinel_enrichment::EnrichmentResult,
+    ) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO enrichment_results
+                (indicator_id, provider_id, status, reputation, score, verdict, summary, raw_json, expires_at)
+             VALUES (?1, ?2, 'succeeded', ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![
+                indicator_id,
+                provider_id,
+                format!("{:?}", result.reputation),
+                result.score,
+                result.verdict,
+                result.summary,
+                result.raw_json.to_string(),
+                result.expires_at.map(|dt| dt.to_rfc3339()),
+            ],
+        )?;
+        if let Some(risk_score) = risk_score_from_enrichment(result) {
+            self.update_indicator_risk_score(indicator_id, risk_score)?;
+        }
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    fn update_indicator_risk_score(&self, indicator_id: i64, risk_score: i64) -> Result<()> {
+        self.conn.execute(
+            "UPDATE indicators SET
+                risk_score = CASE
+                    WHEN risk_score IS NULL OR risk_score < ?1 THEN ?1
+                    ELSE risk_score
+                END,
+                updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?2",
+            params![risk_score, indicator_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_latest_enrichment_results(
+        &self,
+        indicator_id: i64,
+    ) -> Result<Vec<EnrichmentResultRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT er.id, er.indicator_id, er.provider_id, er.status, er.reputation,
+                    er.score, er.verdict, er.summary, er.raw_json, er.fetched_at,
+                    er.expires_at, er.created_at, er.updated_at
+             FROM enrichment_results er
+             JOIN (
+                SELECT provider_id, MAX(fetched_at) AS fetched_at
+                FROM enrichment_results
+                WHERE indicator_id = ?1
+                GROUP BY provider_id
+             ) latest ON latest.provider_id = er.provider_id AND latest.fetched_at = er.fetched_at
+             WHERE er.indicator_id = ?1
+             ORDER BY er.fetched_at DESC",
+        )?;
+        let rows = stmt.query_map([indicator_id], Self::row_to_enrichment_result)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn get_enrichment_job(&self, id: i64) -> Result<Option<EnrichmentJobRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, indicator_id, provider_id, status, priority, attempt_count,
+                    next_attempt_at, last_attempt_at, error_message, created_at, updated_at
+             FROM enrichment_jobs
+             WHERE id = ?1",
+        )?;
+        stmt.query_row([id], Self::row_to_enrichment_job)
+            .optional()
+            .map_err(Into::into)
+    }
+
+    pub fn list_enrichment_jobs(&self, limit: i64) -> Result<Vec<EnrichmentJobWithContext>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT ej.id, ej.indicator_id, ej.provider_id, ej.status, ej.priority,
+                    ej.attempt_count, ej.next_attempt_at, ej.last_attempt_at,
+                    ej.error_message, ej.created_at, ej.updated_at,
+                    ep.name, ep.provider_type, i.indicator_type, i.normalized_value
+             FROM enrichment_jobs ej
+             JOIN enrichment_providers ep ON ep.id = ej.provider_id
+             JOIN indicators i ON i.id = ej.indicator_id
+             ORDER BY
+                CASE ej.status
+                    WHEN 'pending' THEN 0
+                    WHEN 'retrying' THEN 1
+                    WHEN 'running' THEN 2
+                    WHEN 'failed' THEN 3
+                    ELSE 4
+                END,
+                ej.priority ASC,
+                ej.next_attempt_at ASC,
+                ej.created_at ASC
+             LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([limit], Self::row_to_enrichment_job_with_context)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    fn row_to_enrichment_provider(
+        row: &rusqlite::Row,
+    ) -> rusqlite::Result<EnrichmentProviderRecord> {
+        let supports_types_json: String = row.get(7)?;
+        let created_at: String = row.get(8)?;
+        let updated_at: String = row.get(9)?;
+        Ok(EnrichmentProviderRecord {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            provider_type: row.get(2)?,
+            enabled: row.get::<_, i64>(3)? != 0,
+            config_json: row.get(4)?,
+            secret_ref: row.get(5)?,
+            rate_limit_per_minute: row.get(6)?,
+            supports_types: indicator_types_from_json(&supports_types_json),
+            created_at: parse_db_datetime(&created_at).unwrap_or_else(Utc::now),
+            updated_at: parse_db_datetime(&updated_at).unwrap_or_else(Utc::now),
+        })
+    }
+
+    fn row_to_enrichment_job(row: &rusqlite::Row) -> rusqlite::Result<EnrichmentJobRecord> {
+        let next_attempt_at: String = row.get(6)?;
+        let last_attempt_at: Option<String> = row.get(7)?;
+        let created_at: String = row.get(9)?;
+        let updated_at: String = row.get(10)?;
+        Ok(EnrichmentJobRecord {
+            id: row.get(0)?,
+            indicator_id: row.get(1)?,
+            provider_id: row.get(2)?,
+            status: row.get(3)?,
+            priority: row.get(4)?,
+            attempt_count: row.get(5)?,
+            next_attempt_at: parse_db_datetime(&next_attempt_at).unwrap_or_else(Utc::now),
+            last_attempt_at: last_attempt_at.and_then(|value| parse_db_datetime(&value)),
+            error_message: row.get(8)?,
+            created_at: parse_db_datetime(&created_at).unwrap_or_else(Utc::now),
+            updated_at: parse_db_datetime(&updated_at).unwrap_or_else(Utc::now),
+        })
+    }
+
+    fn row_to_enrichment_result(row: &rusqlite::Row) -> rusqlite::Result<EnrichmentResultRecord> {
+        let fetched_at: String = row.get(9)?;
+        let expires_at: Option<String> = row.get(10)?;
+        let created_at: String = row.get(11)?;
+        let updated_at: String = row.get(12)?;
+        Ok(EnrichmentResultRecord {
+            id: row.get(0)?,
+            indicator_id: row.get(1)?,
+            provider_id: row.get(2)?,
+            status: row.get(3)?,
+            reputation: row.get(4)?,
+            score: row.get(5)?,
+            verdict: row.get(6)?,
+            summary: row.get(7)?,
+            raw_json: row.get(8)?,
+            fetched_at: parse_db_datetime(&fetched_at).unwrap_or_else(Utc::now),
+            expires_at: expires_at.and_then(|value| parse_db_datetime(&value)),
+            created_at: parse_db_datetime(&created_at).unwrap_or_else(Utc::now),
+            updated_at: parse_db_datetime(&updated_at).unwrap_or_else(Utc::now),
+        })
+    }
+
+    fn row_to_enrichment_job_with_context(
+        row: &rusqlite::Row,
+    ) -> rusqlite::Result<EnrichmentJobWithContext> {
+        let next_attempt_at: String = row.get(6)?;
+        let last_attempt_at: Option<String> = row.get(7)?;
+        let created_at: String = row.get(9)?;
+        let updated_at: String = row.get(10)?;
+        let indicator_type: String = row.get(13)?;
+        Ok(EnrichmentJobWithContext {
+            id: row.get(0)?,
+            indicator_id: row.get(1)?,
+            provider_id: row.get(2)?,
+            status: row.get(3)?,
+            priority: row.get(4)?,
+            attempt_count: row.get(5)?,
+            next_attempt_at: parse_db_datetime(&next_attempt_at).unwrap_or_else(Utc::now),
+            last_attempt_at: last_attempt_at.and_then(|value| parse_db_datetime(&value)),
+            error_message: row.get(8)?,
+            created_at: parse_db_datetime(&created_at).unwrap_or_else(Utc::now),
+            updated_at: parse_db_datetime(&updated_at).unwrap_or_else(Utc::now),
+            provider_name: row.get(11)?,
+            provider_type: row.get(12)?,
+            indicator_type: indicator_type_from_db(&indicator_type),
+            indicator_value: row.get(14)?,
         })
     }
 
@@ -1324,6 +2110,444 @@ mod tests {
     }
 
     #[test]
+    fn indicators_are_upserted_linked_and_searchable() {
+        let db = memory_db();
+        db.init_schema().unwrap();
+        let feed_id = db
+            .create_feed(&FeedCreate {
+                name: "IOC Feed".into(),
+                url: "https://ioc.example.test/feed.xml".into(),
+                feed_type: FeedType::Rss,
+                enabled: true,
+                interval_secs: 300,
+                ..FeedCreate::default()
+            })
+            .unwrap();
+        let keyword_id = db
+            .create_keyword(&KeywordCreate {
+                pattern: "ransomware".into(),
+                is_regex: false,
+                case_sensitive: false,
+                criticality: Criticality::High,
+                enabled: true,
+            })
+            .unwrap();
+        let alert_id = db
+            .create_alert(&AlertCreate {
+                feed_id,
+                keyword_id,
+                title: Some("IOC alert".into()),
+                content_snippet: "Observed CVE-2025-12345".into(),
+                criticality: Criticality::High,
+                content_hash: "ioc-alert-hash".into(),
+                metadata_json: None,
+            })
+            .unwrap();
+
+        let extracted = sentinel_ioc::ExtractedIndicator {
+            indicator_type: IndicatorType::Cve,
+            value: "cve-2025-12345".into(),
+            normalized_value: "CVE-2025-12345".into(),
+            source_field: "body".into(),
+            start_offset: 9,
+            end_offset: 23,
+            surrounding_text: "Observed CVE-2025-12345".into(),
+            confidence_hint: Some(90),
+        };
+
+        let first_id = db.upsert_indicator(&extracted).unwrap();
+        let second_id = db.upsert_indicator(&extracted).unwrap();
+        assert_eq!(first_id, second_id);
+
+        db.store_extracted_indicators(&[extracted], Some(alert_id), None, Some(feed_id))
+            .unwrap();
+
+        let alert_indicators = db.list_indicators_for_alert(alert_id).unwrap();
+        assert_eq!(alert_indicators.len(), 1);
+        assert_eq!(alert_indicators[0].normalized_value, "CVE-2025-12345");
+        assert_eq!(alert_indicators[0].sighting_count, 3);
+
+        let detail = db
+            .get_indicator_detail(alert_indicators[0].id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(detail.occurrences.len(), 1);
+        assert_eq!(detail.occurrences[0].alert_id, Some(alert_id));
+        assert_eq!(detail.occurrences[0].feed_id, Some(feed_id));
+
+        let search_results = db
+            .search_indicators(&IndicatorSearch {
+                text: Some("2025-12345".into()),
+                indicator_type: Some(IndicatorType::Cve),
+                limit: Some(10),
+            })
+            .unwrap();
+        assert_eq!(search_results.len(), 1);
+        assert_eq!(search_results[0].id, first_id);
+    }
+
+    #[test]
+    fn enrichment_providers_jobs_and_results_are_persisted() {
+        let db = memory_db();
+        db.init_schema().unwrap();
+        let indicator = sentinel_ioc::ExtractedIndicator {
+            indicator_type: IndicatorType::Cve,
+            value: "CVE-2025-12345".into(),
+            normalized_value: "CVE-2025-12345".into(),
+            source_field: "body".into(),
+            start_offset: 0,
+            end_offset: 14,
+            surrounding_text: "CVE-2025-12345".into(),
+            confidence_hint: Some(90),
+        };
+        let indicator_id = db.upsert_indicator(&indicator).unwrap();
+        let provider_id = db
+            .create_enrichment_provider(&EnrichmentProviderCreate {
+                name: "cisa-kev".into(),
+                provider_type: "cisa_kev".into(),
+                enabled: true,
+                config_json: None,
+                secret_ref: None,
+                rate_limit_per_minute: Some(60),
+                supports_types: vec![IndicatorType::Cve],
+            })
+            .unwrap();
+
+        let providers = db.list_enabled_enrichment_providers().unwrap();
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].name, "cisa-kev");
+        assert_eq!(providers[0].supports_types, vec![IndicatorType::Cve]);
+
+        let first_job = db
+            .queue_enrichment_job(indicator_id, provider_id, 50)
+            .unwrap();
+        let duplicate_job = db
+            .queue_enrichment_job(indicator_id, provider_id, 50)
+            .unwrap();
+        assert_eq!(first_job, duplicate_job);
+
+        let claimed = db.claim_next_enrichment_jobs(5).unwrap();
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].id, first_job);
+        assert_eq!(claimed[0].status, "running");
+
+        db.store_enrichment_result(
+            indicator_id,
+            provider_id,
+            &sentinel_enrichment::EnrichmentResult {
+                provider_name: "cisa-kev".into(),
+                indicator_type: IndicatorType::Cve,
+                normalized_value: "CVE-2025-12345".into(),
+                reputation: sentinel_enrichment::Reputation::Malicious,
+                score: Some(95),
+                verdict: Some("Known Exploited".into()),
+                summary: Some("CISA KEV match".into()),
+                raw_json: serde_json::json!({"known": true}),
+                expires_at: None,
+            },
+        )
+        .unwrap();
+        db.mark_enrichment_job_succeeded(first_job).unwrap();
+
+        let results = db.get_latest_enrichment_results(indicator_id).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].provider_id, provider_id);
+        assert_eq!(results[0].reputation.as_deref(), Some("Malicious"));
+        assert_eq!(results[0].score, Some(95));
+        assert_eq!(results[0].verdict.as_deref(), Some("Known Exploited"));
+        let indicator = db.get_indicator(indicator_id).unwrap().unwrap();
+        assert_eq!(indicator.risk_score, Some(95));
+    }
+
+    #[test]
+    fn enrichment_result_updates_indicator_risk_without_lowering_existing_score() {
+        let db = memory_db();
+        db.init_schema().unwrap();
+        let indicator = sentinel_ioc::ExtractedIndicator {
+            indicator_type: IndicatorType::Domain,
+            value: "bad.example.net".into(),
+            normalized_value: "bad.example.net".into(),
+            source_field: "body".into(),
+            start_offset: 0,
+            end_offset: 15,
+            surrounding_text: "bad.example.net".into(),
+            confidence_hint: Some(70),
+        };
+        let indicator_id = db.upsert_indicator(&indicator).unwrap();
+        let provider_id = db
+            .create_enrichment_provider(&EnrichmentProviderCreate {
+                name: "mock-risk".into(),
+                provider_type: "mock".into(),
+                enabled: true,
+                supports_types: vec![IndicatorType::Domain],
+                ..EnrichmentProviderCreate::default()
+            })
+            .unwrap();
+
+        db.store_enrichment_result(
+            indicator_id,
+            provider_id,
+            &sentinel_enrichment::EnrichmentResult {
+                provider_name: "mock-risk".into(),
+                indicator_type: IndicatorType::Domain,
+                normalized_value: "bad.example.net".into(),
+                reputation: sentinel_enrichment::Reputation::Suspicious,
+                score: None,
+                verdict: None,
+                summary: None,
+                raw_json: serde_json::json!({}),
+                expires_at: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            db.get_indicator(indicator_id).unwrap().unwrap().risk_score,
+            Some(60)
+        );
+
+        db.store_enrichment_result(
+            indicator_id,
+            provider_id,
+            &sentinel_enrichment::EnrichmentResult {
+                provider_name: "mock-risk".into(),
+                indicator_type: IndicatorType::Domain,
+                normalized_value: "bad.example.net".into(),
+                reputation: sentinel_enrichment::Reputation::Benign,
+                score: None,
+                verdict: None,
+                summary: None,
+                raw_json: serde_json::json!({}),
+                expires_at: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            db.get_indicator(indicator_id).unwrap().unwrap().risk_score,
+            Some(60)
+        );
+    }
+
+    #[test]
+    fn enrichment_job_failure_increments_attempts_and_schedules_retry() {
+        let db = memory_db();
+        db.init_schema().unwrap();
+        let indicator = sentinel_ioc::ExtractedIndicator {
+            indicator_type: IndicatorType::Domain,
+            value: "bad.example.net".into(),
+            normalized_value: "bad.example.net".into(),
+            source_field: "body".into(),
+            start_offset: 0,
+            end_offset: 15,
+            surrounding_text: "bad.example.net".into(),
+            confidence_hint: Some(65),
+        };
+        let indicator_id = db.upsert_indicator(&indicator).unwrap();
+        let provider_id = db
+            .create_enrichment_provider(&EnrichmentProviderCreate {
+                name: "urlhaus".into(),
+                provider_type: "urlhaus".into(),
+                enabled: true,
+                config_json: None,
+                secret_ref: Some("threatdeck/urlhaus/api_key".into()),
+                rate_limit_per_minute: Some(30),
+                supports_types: vec![IndicatorType::Domain],
+            })
+            .unwrap();
+        let job_id = db
+            .queue_enrichment_job(indicator_id, provider_id, 100)
+            .unwrap();
+        let claimed = db.claim_next_enrichment_jobs(1).unwrap();
+        assert_eq!(claimed.len(), 1);
+
+        db.mark_enrichment_job_failed(job_id, "temporary failure", true)
+            .unwrap();
+        let retry_claim = db.claim_next_enrichment_jobs(1).unwrap();
+        assert!(retry_claim.is_empty());
+
+        let job = db.get_enrichment_job(job_id).unwrap().unwrap();
+        assert_eq!(job.status, "retrying");
+        assert_eq!(job.attempt_count, 1);
+        assert_eq!(job.error_message.as_deref(), Some("temporary failure"));
+    }
+
+    #[test]
+    fn enrichment_job_rate_limit_reschedules_without_incrementing_attempts() {
+        let db = memory_db();
+        db.init_schema().unwrap();
+        let indicator = sentinel_ioc::ExtractedIndicator {
+            indicator_type: IndicatorType::Domain,
+            value: "bad.example.net".into(),
+            normalized_value: "bad.example.net".into(),
+            source_field: "body".into(),
+            start_offset: 0,
+            end_offset: 15,
+            surrounding_text: "bad.example.net".into(),
+            confidence_hint: Some(65),
+        };
+        let indicator_id = db.upsert_indicator(&indicator).unwrap();
+        let provider_id = db
+            .create_enrichment_provider(&EnrichmentProviderCreate {
+                name: "urlhaus".into(),
+                provider_type: "urlhaus".into(),
+                enabled: true,
+                supports_types: vec![IndicatorType::Domain],
+                ..EnrichmentProviderCreate::default()
+            })
+            .unwrap();
+        let job_id = db
+            .queue_enrichment_job(indicator_id, provider_id, 100)
+            .unwrap();
+
+        db.mark_enrichment_job_rate_limited(job_id, "rate limit reached")
+            .unwrap();
+
+        let job = db.get_enrichment_job(job_id).unwrap().unwrap();
+        assert_eq!(job.status, "rate_limited");
+        assert_eq!(job.attempt_count, 0);
+        assert_eq!(job.error_message.as_deref(), Some("rate limit reached"));
+        assert!(db.claim_next_enrichment_jobs(1).unwrap().is_empty());
+    }
+
+    #[test]
+    fn enrichment_queueing_uses_enabled_supported_providers_and_fresh_results() {
+        let db = memory_db();
+        db.init_schema().unwrap();
+        let cve = sentinel_ioc::ExtractedIndicator {
+            indicator_type: IndicatorType::Cve,
+            value: "CVE-2025-12345".into(),
+            normalized_value: "CVE-2025-12345".into(),
+            source_field: "body".into(),
+            start_offset: 0,
+            end_offset: 14,
+            surrounding_text: "CVE-2025-12345".into(),
+            confidence_hint: Some(90),
+        };
+        let domain = sentinel_ioc::ExtractedIndicator {
+            indicator_type: IndicatorType::Domain,
+            value: "bad.example.net".into(),
+            normalized_value: "bad.example.net".into(),
+            source_field: "body".into(),
+            start_offset: 15,
+            end_offset: 30,
+            surrounding_text: "bad.example.net".into(),
+            confidence_hint: Some(65),
+        };
+        let ids = db
+            .store_extracted_indicators(&[cve, domain], None, None, None)
+            .unwrap();
+        let cisa_id = db
+            .create_enrichment_provider(&EnrichmentProviderCreate {
+                name: "cisa-kev".into(),
+                provider_type: "cisa_kev".into(),
+                enabled: true,
+                supports_types: vec![IndicatorType::Cve],
+                ..EnrichmentProviderCreate::default()
+            })
+            .unwrap();
+        db.create_enrichment_provider(&EnrichmentProviderCreate {
+            name: "disabled-urlhaus".into(),
+            provider_type: "urlhaus".into(),
+            enabled: false,
+            supports_types: vec![IndicatorType::Domain],
+            ..EnrichmentProviderCreate::default()
+        })
+        .unwrap();
+        db.create_enrichment_provider(&EnrichmentProviderCreate {
+            name: "enabled-urlhaus".into(),
+            provider_type: "urlhaus".into(),
+            enabled: true,
+            supports_types: vec![IndicatorType::Domain],
+            ..EnrichmentProviderCreate::default()
+        })
+        .unwrap();
+
+        let queued = db.queue_enrichment_jobs_for_indicators(&ids).unwrap();
+        assert_eq!(queued.len(), 2);
+
+        let duplicate = db.queue_enrichment_jobs_for_indicators(&ids).unwrap();
+        assert_eq!(duplicate.len(), 2);
+        assert_eq!(queued, duplicate);
+
+        db.store_enrichment_result(
+            ids[0],
+            cisa_id,
+            &sentinel_enrichment::EnrichmentResult {
+                provider_name: "cisa-kev".into(),
+                indicator_type: IndicatorType::Cve,
+                normalized_value: "CVE-2025-12345".into(),
+                reputation: sentinel_enrichment::Reputation::Malicious,
+                score: Some(95),
+                verdict: Some("Known Exploited".into()),
+                summary: Some("Fresh KEV result".into()),
+                raw_json: serde_json::json!({"fresh": true}),
+                expires_at: Some(Utc::now() + Duration::hours(24)),
+            },
+        )
+        .unwrap();
+
+        db.mark_enrichment_job_succeeded(queued[0]).unwrap();
+        let after_fresh_result = db.queue_enrichment_jobs_for_indicators(&[ids[0]]).unwrap();
+        assert!(after_fresh_result.is_empty());
+    }
+
+    #[test]
+    fn enrichment_jobs_can_be_listed_for_troubleshooting() {
+        let db = memory_db();
+        db.init_schema().unwrap();
+        let indicator = sentinel_ioc::ExtractedIndicator {
+            indicator_type: IndicatorType::Cve,
+            value: "CVE-2025-12345".into(),
+            normalized_value: "CVE-2025-12345".into(),
+            source_field: "body".into(),
+            start_offset: 0,
+            end_offset: 14,
+            surrounding_text: "CVE-2025-12345".into(),
+            confidence_hint: Some(90),
+        };
+        let indicator_id = db.upsert_indicator(&indicator).unwrap();
+        let provider = db
+            .list_enabled_enrichment_providers()
+            .unwrap()
+            .into_iter()
+            .find(|provider| provider.name == "cisa-kev")
+            .unwrap();
+        let job_id = db
+            .queue_enrichment_job(indicator_id, provider.id, 25)
+            .unwrap();
+
+        let jobs = db.list_enrichment_jobs(10).unwrap();
+
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].id, job_id);
+        assert_eq!(jobs[0].provider_name, "cisa-kev");
+        assert_eq!(jobs[0].indicator_value, "CVE-2025-12345");
+        assert_eq!(jobs[0].indicator_type, IndicatorType::Cve);
+        assert_eq!(jobs[0].status, "pending");
+        assert_eq!(jobs[0].priority, 25);
+    }
+
+    #[test]
+    fn enrichment_providers_can_be_listed_and_toggled_by_name() {
+        let db = memory_db();
+        db.init_schema().unwrap();
+
+        db.set_enrichment_provider_enabled("cisa-kev", false)
+            .unwrap();
+        assert!(db.list_enabled_enrichment_providers().unwrap().is_empty());
+
+        let providers = db.list_enrichment_providers().unwrap();
+        let cisa = providers
+            .iter()
+            .find(|provider| provider.name == "cisa-kev")
+            .expect("provider still listed");
+        assert!(!cisa.enabled);
+
+        db.set_enrichment_provider_enabled("cisa-kev", true)
+            .unwrap();
+        assert_eq!(db.list_enabled_enrichment_providers().unwrap().len(), 1);
+    }
+
+    #[test]
     fn init_schema_does_not_reseed_after_seed_marker_exists() {
         let db = memory_db();
         db.init_schema().unwrap();
@@ -1336,6 +2560,20 @@ mod tests {
         assert_eq!(db.list_feeds(None).unwrap().len(), 0);
         assert_eq!(db.list_keywords(false).unwrap().len(), 0);
         assert_eq!(db.get_alert_count().unwrap(), 0);
+    }
+
+    #[test]
+    fn init_schema_seeds_builtin_cisa_kev_provider() {
+        let db = memory_db();
+        db.init_schema().unwrap();
+
+        let providers = db.list_enabled_enrichment_providers().unwrap();
+        let cisa = providers
+            .iter()
+            .find(|provider| provider.name == "cisa-kev")
+            .expect("CISA KEV provider seeded");
+        assert_eq!(cisa.provider_type, "cisa_kev");
+        assert_eq!(cisa.supports_types, vec![IndicatorType::Cve]);
     }
 }
 
@@ -1430,6 +2668,153 @@ pub struct AlertFilter {
     pub feed_id: Option<i64>,
     pub keyword_id: Option<i64>,
     pub limit: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct IndicatorSearch {
+    pub text: Option<String>,
+    pub indicator_type: Option<IndicatorType>,
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IndicatorRecord {
+    pub id: i64,
+    pub indicator_type: IndicatorType,
+    pub value: String,
+    pub normalized_value: String,
+    pub first_seen_at: DateTime<Utc>,
+    pub last_seen_at: DateTime<Utc>,
+    pub sighting_count: i64,
+    pub confidence_score: Option<i64>,
+    pub risk_score: Option<i64>,
+    pub metadata_json: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct IndicatorOccurrenceCreate {
+    pub indicator_id: i64,
+    pub content_item_id: Option<i64>,
+    pub alert_id: Option<i64>,
+    pub feed_id: Option<i64>,
+    pub source_field: Option<String>,
+    pub start_offset: Option<i64>,
+    pub end_offset: Option<i64>,
+    pub surrounding_text: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IndicatorOccurrence {
+    pub id: i64,
+    pub indicator_id: i64,
+    pub content_item_id: Option<i64>,
+    pub alert_id: Option<i64>,
+    pub feed_id: Option<i64>,
+    pub source_field: Option<String>,
+    pub start_offset: Option<i64>,
+    pub end_offset: Option<i64>,
+    pub surrounding_text: Option<String>,
+    pub detected_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IndicatorDetail {
+    pub indicator: IndicatorRecord,
+    pub occurrences: Vec<IndicatorOccurrence>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StoredFeedItem {
+    pub id: i64,
+    pub inserted: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct EnrichmentProviderCreate {
+    pub name: String,
+    pub provider_type: String,
+    pub enabled: bool,
+    pub config_json: Option<String>,
+    pub secret_ref: Option<String>,
+    pub rate_limit_per_minute: Option<u32>,
+    pub supports_types: Vec<IndicatorType>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct EnrichmentProviderUpdate {
+    pub id: i64,
+    pub enabled: Option<bool>,
+    pub config_json: Option<String>,
+    pub secret_ref: Option<String>,
+    pub rate_limit_per_minute: Option<u32>,
+    pub supports_types: Option<Vec<IndicatorType>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnrichmentProviderRecord {
+    pub id: i64,
+    pub name: String,
+    pub provider_type: String,
+    pub enabled: bool,
+    pub config_json: Option<String>,
+    pub secret_ref: Option<String>,
+    pub rate_limit_per_minute: Option<i64>,
+    pub supports_types: Vec<IndicatorType>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnrichmentJobRecord {
+    pub id: i64,
+    pub indicator_id: i64,
+    pub provider_id: i64,
+    pub status: String,
+    pub priority: i64,
+    pub attempt_count: i64,
+    pub next_attempt_at: DateTime<Utc>,
+    pub last_attempt_at: Option<DateTime<Utc>>,
+    pub error_message: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnrichmentJobWithContext {
+    pub id: i64,
+    pub indicator_id: i64,
+    pub provider_id: i64,
+    pub status: String,
+    pub priority: i64,
+    pub attempt_count: i64,
+    pub next_attempt_at: DateTime<Utc>,
+    pub last_attempt_at: Option<DateTime<Utc>>,
+    pub error_message: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub provider_name: String,
+    pub provider_type: String,
+    pub indicator_type: IndicatorType,
+    pub indicator_value: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnrichmentResultRecord {
+    pub id: i64,
+    pub indicator_id: i64,
+    pub provider_id: i64,
+    pub status: String,
+    pub reputation: Option<String>,
+    pub score: Option<i64>,
+    pub verdict: Option<String>,
+    pub summary: Option<String>,
+    pub raw_json: Option<String>,
+    pub fetched_at: DateTime<Utc>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Default)]

@@ -57,7 +57,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_trend(f, app, main_chunks[2]);
 
     // Status bar
-    let status = Paragraph::new("[r] Refresh  [1-8] Navigate  [?] Help  [q] Quit")
+    let status = Paragraph::new("[r] Refresh  [1-9,0] Navigate  [?] Help  [q] Quit")
         .style(Style::default().fg(app.theme.muted));
     f.render_widget(status, chunks[2]);
 }

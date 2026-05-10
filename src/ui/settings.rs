@@ -1,5 +1,6 @@
 use crate::app::{App, InputMode};
 use crate::types::*;
+use crate::ui::list::{motion_from_key, move_selection, selected_style};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     layout::{Constraint, Direction, Layout},
@@ -33,11 +34,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         );
     f.render_widget(title, chunks[0]);
 
-    let tab_titles = vec!["General", "Notifications"];
+    let tab_titles = vec!["General", "Notifications", "Enrichment"];
     let tabs = Tabs::new(tab_titles)
         .select(match app.settings_tab {
             SettingsTab::General => 0,
             SettingsTab::Notifications => 1,
+            SettingsTab::Enrichment => 2,
         })
         .style(Style::default().fg(app.theme.muted))
         .highlight_style(
@@ -55,12 +57,15 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     match app.settings_tab {
         SettingsTab::General => draw_general(f, app, chunks[2]),
         SettingsTab::Notifications => draw_notifications(f, app, chunks[2]),
+        SettingsTab::Enrichment => draw_enrichment(f, app, chunks[2]),
     }
 
     let status_text = if app.settings_notif_form && app.input_mode == InputMode::Typing {
         "-- INSERT -- Type to enter text | [Enter] Save | [Esc] Stop typing".to_string()
+    } else if matches!(app.settings_tab, SettingsTab::Enrichment) {
+        "-- NORMAL -- [1-9,0] Nav  [Tab] Tabs  [Space/e] Toggle  [t] Test provider  [r] Refresh  [?] Help  [q] Quit".to_string()
     } else {
-        "-- NORMAL -- [1-8] Nav  [Tab] Tabs  [Left/Right] Theme  [-/+] Retention  [p] Preview  [x] Cleanup  [s] Save  [?] Help  [q] Quit".to_string()
+        "-- NORMAL -- [1-9,0] Nav  [Tab] Tabs  [Left/Right] Theme  [-/+] Retention  [p] Preview  [x] Cleanup  [s] Save  [?] Help  [q] Quit".to_string()
     };
     let status = Paragraph::new(status_text).style(Style::default().fg(app.theme.muted));
     f.render_widget(status, chunks[3]);
@@ -75,6 +80,8 @@ fn draw_general(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(3),
+            Constraint::Length(3),
             Constraint::Length(3),
             Constraint::Length(3),
             Constraint::Length(3),
@@ -114,10 +121,51 @@ fn draw_general(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     );
     f.render_widget(preview_para, chunks[2]);
 
-    let help = Paragraph::new("Keys: [Left/Right/Space] Theme  [-/+] Retention  [p] Preview cleanup  [x] Execute cleanup  [s] Save settings")
+    let ioc_text = format!(
+        "IOC extraction: {} | Raw JSON: {} | Max indicators/content: {}",
+        if app.config.ioc.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        if app.config.ioc.extract_from_raw_json {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        app.config.ioc.max_indicators_per_content_item
+    );
+    let ioc_para = Paragraph::new(ioc_text).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(app.theme.border)),
+    );
+    f.render_widget(ioc_para, chunks[3]);
+
+    let enrichment_text = format!(
+        "Enrichment queueing: {} | Only alert indicators: {}",
+        if app.config.enrichment.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        if app.config.enrichment.enrich_only_alert_indicators {
+            "yes"
+        } else {
+            "no"
+        }
+    );
+    let enrichment_para = Paragraph::new(enrichment_text).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(app.theme.border)),
+    );
+    f.render_widget(enrichment_para, chunks[4]);
+
+    let help = Paragraph::new("Keys: [Left/Right/Space] Theme  [-/+] Retention  [i] IOC  [j] Raw JSON  [e] Enrichment  [o] Alert-only  [s] Save")
         .style(Style::default().fg(app.theme.muted))
         .alignment(ratatui::layout::Alignment::Center);
-    f.render_widget(help, chunks[3]);
+    f.render_widget(help, chunks[5]);
 }
 
 fn draw_notifications(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
@@ -166,6 +214,75 @@ fn draw_notifications(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect)
             .border_style(Style::default().fg(app.theme.border)),
     );
     f.render_widget(table, area);
+}
+
+fn draw_enrichment(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
+    let header = Row::new(vec![
+        "Provider",
+        "Type",
+        "Enabled",
+        "Rate/min",
+        "Supports",
+        "Secret Ref",
+    ])
+    .style(
+        Style::default()
+            .add_modifier(Modifier::BOLD)
+            .fg(app.theme.primary),
+    );
+
+    let rows = app.settings_enrichment_providers.iter().map(|provider| {
+        let supports = provider
+            .supports_types
+            .iter()
+            .map(|indicator_type| format!("{indicator_type:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        Row::new(vec![
+            Cell::from(provider.name.as_str()),
+            Cell::from(provider.provider_type.as_str()),
+            Cell::from(if provider.enabled { "✓" } else { "✗" }).style(Style::default().fg(
+                if provider.enabled {
+                    app.theme.success
+                } else {
+                    app.theme.error
+                },
+            )),
+            Cell::from(
+                provider
+                    .rate_limit_per_minute
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+            ),
+            Cell::from(truncate_chars(&supports, 36)),
+            Cell::from(provider.secret_ref.as_deref().unwrap_or("-")),
+        ])
+        .style(Style::default().fg(app.theme.fg))
+    });
+
+    let mut table_state = ratatui::widgets::TableState::default();
+    table_state.select(Some(app.settings_enrichment_provider_selected));
+
+    let table = Table::new(
+        rows,
+        vec![
+            Constraint::Length(20),
+            Constraint::Length(14),
+            Constraint::Length(8),
+            Constraint::Length(9),
+            Constraint::Min(20),
+            Constraint::Min(14),
+        ],
+    )
+    .header(header)
+    .block(
+        Block::default()
+            .title("Enrichment Providers")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(app.theme.border)),
+    )
+    .row_highlight_style(selected_style());
+    f.render_stateful_widget(table, area, &mut table_state);
 }
 
 fn draw_notif_form(f: &mut Frame, app: &App) {
@@ -366,11 +483,19 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         return;
     }
 
+    if matches!(app.settings_tab, SettingsTab::Enrichment) {
+        handle_enrichment_key(app, key);
+        if !matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
+            return;
+        }
+    }
+
     match key.code {
         KeyCode::Tab | KeyCode::BackTab => {
             app.settings_tab = match app.settings_tab {
                 SettingsTab::General => SettingsTab::Notifications,
-                SettingsTab::Notifications => SettingsTab::General,
+                SettingsTab::Notifications => SettingsTab::Enrichment,
+                SettingsTab::Enrichment => SettingsTab::General,
             };
         }
         KeyCode::Right | KeyCode::Char(' ') if matches!(app.settings_tab, SettingsTab::General) => {
@@ -388,6 +513,19 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('-') if matches!(app.settings_tab, SettingsTab::General) => {
             app.settings_retention_days = app.settings_retention_days.saturating_sub(1).max(1);
             app.settings_cleanup_preview = None;
+        }
+        KeyCode::Char('i') if matches!(app.settings_tab, SettingsTab::General) => {
+            app.config.ioc.enabled = !app.config.ioc.enabled;
+        }
+        KeyCode::Char('j') if matches!(app.settings_tab, SettingsTab::General) => {
+            app.config.ioc.extract_from_raw_json = !app.config.ioc.extract_from_raw_json;
+        }
+        KeyCode::Char('e') if matches!(app.settings_tab, SettingsTab::General) => {
+            app.config.enrichment.enabled = !app.config.enrichment.enabled;
+        }
+        KeyCode::Char('o') if matches!(app.settings_tab, SettingsTab::General) => {
+            app.config.enrichment.enrich_only_alert_indicators =
+                !app.config.enrichment.enrich_only_alert_indicators;
         }
         KeyCode::Char('p') => {
             if let Some(cutoff) = chrono::Utc::now()
@@ -426,6 +564,84 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
     }
 }
 
+fn handle_enrichment_key(app: &mut App, key: KeyEvent) {
+    if let Some(motion) = motion_from_key(key, &mut app.pending_g) {
+        app.settings_enrichment_provider_selected = move_selection(
+            app.settings_enrichment_provider_selected,
+            app.settings_enrichment_providers.len(),
+            motion,
+        );
+        return;
+    }
+
+    match key.code {
+        KeyCode::Char(' ') | KeyCode::Char('e') => {
+            if let Some(provider) = app
+                .settings_enrichment_providers
+                .get(app.settings_enrichment_provider_selected)
+                .cloned()
+            {
+                match app
+                    .db
+                    .set_enrichment_provider_enabled(&provider.name, !provider.enabled)
+                {
+                    Ok(()) => {
+                        app.refresh_settings();
+                        app.refresh_enrichment_queue();
+                        let state = if provider.enabled {
+                            "disabled"
+                        } else {
+                            "enabled"
+                        };
+                        app.set_notification(
+                            format!("Provider {} {state}", provider.name),
+                            NotificationType::Success,
+                        );
+                    }
+                    Err(_) => app.set_notification(
+                        format!("Unable to update provider {}", provider.name),
+                        NotificationType::Error,
+                    ),
+                }
+            }
+        }
+        KeyCode::Char('t') => {
+            if let Some(provider) = app
+                .settings_enrichment_providers
+                .get(app.settings_enrichment_provider_selected)
+            {
+                match provider_health_message(provider, &app.paths.data_dir) {
+                    Ok(message) => app.set_notification(message, NotificationType::Success),
+                    Err(message) => app.set_notification(message, NotificationType::Warning),
+                }
+            }
+        }
+        KeyCode::Char('r') => app.refresh_settings(),
+        _ => {}
+    }
+}
+
+fn provider_health_message(
+    provider: &crate::db::EnrichmentProviderRecord,
+    data_dir: &std::path::Path,
+) -> std::result::Result<String, String> {
+    match provider.provider_type.as_str() {
+        "cisa_kev" => {
+            let path = data_dir.join("cisa-kev.json");
+            if !path.exists() {
+                return Err(format!("CISA KEV cache not installed: {}", path.display()));
+            }
+            sentinel_enrichment::CisaKevProvider::from_json_file(&path)
+                .map(|_| format!("CISA KEV cache is valid: {}", path.display()))
+                .map_err(|e| format!("CISA KEV cache failed validation: {}", e))
+        }
+        _ => Err(format!(
+            "No local health check available for {}",
+            provider.name
+        )),
+    }
+}
+
 fn cycle_theme(app: &mut App, forward: bool) {
     let names = crate::theme::theme_names();
     let idx = names
@@ -441,6 +657,20 @@ fn cycle_theme(app: &mut App, forward: bool) {
     };
     app.settings_theme_name = names[next].to_string();
     app.theme = crate::theme::get_runtime_theme(&app.settings_theme_name);
+}
+
+fn truncate_chars(value: &str, max: usize) -> String {
+    if value.chars().count() <= max {
+        value.to_string()
+    } else {
+        format!(
+            "{}...",
+            value
+                .chars()
+                .take(max.saturating_sub(3))
+                .collect::<String>()
+        )
+    }
 }
 
 fn handle_notif_form_key(app: &mut App, key: KeyEvent) {
@@ -620,5 +850,45 @@ fn submit_notif_form(app: &mut App) {
             format!("Error: {}", e),
             crate::types::NotificationType::Error,
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::provider_health_message;
+    use crate::db::EnrichmentProviderRecord;
+    use chrono::Utc;
+
+    fn provider(provider_type: &str) -> EnrichmentProviderRecord {
+        EnrichmentProviderRecord {
+            id: 1,
+            name: "test-provider".into(),
+            provider_type: provider_type.into(),
+            enabled: true,
+            config_json: None,
+            secret_ref: None,
+            rate_limit_per_minute: None,
+            supports_types: vec![sentinel_ioc::IndicatorType::Cve],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn provider_health_reports_missing_cisa_cache() {
+        let dir = std::env::temp_dir().join(format!(
+            "threatdeck-missing-cisa-cache-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let message = provider_health_message(&provider("cisa_kev"), &dir).unwrap_err();
+        assert!(message.contains("not installed"));
+    }
+
+    #[test]
+    fn provider_health_reports_unsupported_provider() {
+        let message = provider_health_message(&provider("urlhaus"), std::path::Path::new("/tmp"))
+            .unwrap_err();
+        assert!(message.contains("No local health check"));
     }
 }

@@ -47,8 +47,9 @@
 - **Keyword Matching** — Simple text or regex-based keyword matching with 4 criticality levels (Low, Medium, High, Critical)
 - **Alert Generation** — Automatic alert creation with deduplication (content hashing), snippet extraction, and metadata preservation
 - **Cached Article Feed** — Browse every cached feed item across RSS/API sources and read cleaned article text directly in the terminal
+- **IOC Extraction and Enrichment** — Extract IOCs from alerts and feed items, store occurrence history, queue local enrichment, and display reputation/risk in the TUI
 - **Tagging System** — Organize feeds, keywords, and alerts with color-coded custom tags
-- **Notifications** — Send alerts via Email (SMTP), Webhook, or Discord with per-channel minimum criticality thresholds
+- **Notifications** — Send alerts via Email (SMTP), Webhook, or Discord with per-channel minimum criticality thresholds and IOC summaries
 - **Dashboard Overview** — At-a-glance statistics, criticality distribution, recent alerts, and 7-day trend visualization
 - **Feed Health Monitoring** — Track consecutive failures, health status (Healthy/Warning/Error/Disabled), and detailed health logs
 - **Settings Management** — Alert retention policies, theme selection, notification channel configuration
@@ -116,7 +117,7 @@ ThreatDeck --config-paths
 
 ### Creating Keywords
 
-1. Press `4` to navigate to the **Keywords** screen
+1. Press `7` to navigate to the **Keywords** screen
 2. Press `a` to add a keyword
 3. Configure:
    - **Pattern**: Text or regex pattern to match
@@ -143,11 +144,20 @@ alert_retention_days = 30         # Auto-delete alerts older than N days
 dashboard_refresh_secs = 30       # Dashboard data refresh interval
 tick_rate_ms = 250                # UI tick rate (lower = more responsive)
 max_health_log_entries = 100      # Maximum feed health log entries to retain
+
+[ioc]
+enabled = true
+extract_from_raw_json = true
+max_indicators_per_content_item = 250
+
+[enrichment]
+enabled = true
+enrich_only_alert_indicators = false
 ```
 
 ### Theme Settings
 
-Change themes dynamically via the Settings screen (`7`) or edit `config.toml` directly:
+Change themes dynamically via the Settings screen (`0`) or edit `config.toml` directly:
 
 | Theme     | Description                              |
 |-----------|------------------------------------------|
@@ -218,10 +228,12 @@ Access `.onion` threat intelligence sources via a Tor SOCKS5 proxy. Configure th
 | `2`            | Feeds screen                                |
 | `3`            | Alerts screen                               |
 | `4`            | Articles screen                             |
-| `5`            | Keywords screen                             |
-| `6`            | Tags screen                                 |
-| `7`            | Logs screen                                 |
-| `8`            | Settings screen                             |
+| `5`            | Indicators screen                           |
+| `6`            | Enrichment Queue screen                     |
+| `7`            | Keywords screen                             |
+| `8`            | Tags screen                                 |
+| `9`            | Logs screen                                 |
+| `0`            | Settings screen                             |
 | `q`            | Quit application                            |
 | `?` / `F1`     | Toggle help overlay                         |
 | `Esc`          | Cancel current action / Go back             |
@@ -231,7 +243,7 @@ Access `.onion` threat intelligence sources via a Tor SOCKS5 proxy. Configure th
 | Key            | Action                                      |
 |----------------|---------------------------------------------|
 | `r`            | Refresh dashboard data                      |
-| `1-8`          | Navigate to other screens                   |
+| `1-9,0`        | Navigate to other screens                   |
 
 ### Feeds
 
@@ -283,6 +295,28 @@ Access `.onion` threat intelligence sources via a Tor SOCKS5 proxy. Configure th
 | `/`            | Filter cached articles                      |
 | `Esc`          | Close article reader                        |
 
+### Indicators
+
+| Key            | Action                                      |
+|----------------|---------------------------------------------|
+| `j` / `↓`      | Move selection down                         |
+| `k` / `↑`      | Move selection up                           |
+| `e`            | Queue enrichment for selected indicator     |
+| `t`            | Cycle IOC type filter                       |
+| `c`            | Clear IOC type filter                       |
+| `r`            | Refresh indicators                          |
+| `/`            | Search indicator values                     |
+
+### Enrichment Queue
+
+| Key            | Action                                      |
+|----------------|---------------------------------------------|
+| `j` / `↓`      | Move selection down                         |
+| `k` / `↑`      | Move selection up                           |
+| `p`            | Process a batch of pending jobs             |
+| `r`            | Refresh queue                               |
+| `/`            | Filter queue rows                           |
+
 ### Keywords
 
 | Key            | Action                                      |
@@ -316,7 +350,13 @@ Access `.onion` threat intelligence sources via a Tor SOCKS5 proxy. Configure th
 
 | Key            | Action                                      |
 |----------------|---------------------------------------------|
-| `Tab`          | Switch between General/Notifications tabs   |
+| `Tab`          | Switch General/Notifications/Enrichment tabs |
+| `i`            | Toggle IOC extraction in General tab        |
+| `j`            | Toggle raw JSON extraction in General tab   |
+| `e`            | Toggle enrichment queueing in General tab   |
+| `o`            | Toggle alert-only enrichment in General tab |
+| `Space` / `e`  | Toggle selected provider in Enrichment tab  |
+| `t`            | Test selected provider in Enrichment tab    |
 
 ### Forms (Add/Edit)
 
@@ -342,6 +382,7 @@ ThreatDeck/
 │   ├── scheduler.rs      # Background feed polling scheduler
 │   ├── notify.rs         # Notification channels (Email, Webhook, Discord)
 │   ├── alert.rs          # Alert processing and deduplication logic
+│   ├── enrichment.rs     # Enrichment worker orchestration
 │   ├── keyword.rs        # Keyword matching engine (text + regex)
 │   ├── tag.rs            # Tag management
 │   ├── template.rs       # API template management
@@ -357,7 +398,10 @@ ThreatDeck/
 │       ├── mod.rs        # Main draw dispatcher, help, notifications
 │       ├── dashboard.rs  # Stats, pie chart, recent alerts, trend
 │       ├── feeds.rs      # Feed list, add/edit form
-│       ├── alerts.rs     # Alert list, bulk operations
+│       ├── alerts.rs     # Alert list, bulk operations, IOC panel
+│       ├── articles.rs   # Cached article reader with IOC panel
+│       ├── indicators.rs # Indicator search and detail page
+│       ├── enrichment_queue.rs # Enrichment queue monitor
 │       ├── keywords.rs   # Keyword list, test mode
 │       ├── tags.rs       # Tag management screen
 │       ├── logs.rs       # Feed health log viewer
@@ -373,6 +417,7 @@ ThreatDeck/
 - **ratatui + crossterm**: Cross-platform terminal UI framework with async event handling
 - **JSONPath for APIs**: Declarative data extraction without custom parsers per feed
 - **Content Hashing**: SHA-256-based deduplication prevents duplicate alerts from the same content
+- **Queued Enrichment**: IOC enrichment uses an outbox-style queue so feed ingestion stays fast and resilient
 - **Modular Feed Engine**: Each feed type implements a common interface, making it easy to add new sources
 
 ## Development
@@ -450,10 +495,12 @@ The application uses the following SQLite schema (see `src/schema.sql`):
 - **feed_tags / keyword_tags / alert_tags** — Many-to-many tag assignments
 - **notifications** — Notification channel configurations
 - **feed_health_logs** — Per-feed health status history
+- **indicators / indicator_occurrences / alert_indicators** — Extracted IOC records and source links
+- **enrichment_providers / enrichment_jobs / enrichment_results** — Provider configuration, queued jobs, and normalized enrichment output
 
 ## Upcoming Features
 
-- IOC extraction and enrichment
+- Additional enrichment providers (URLHaus, AbuseIPDB, GreyNoise, VirusTotal, RDAP, DNS)
 - Terminal-native case management
 - Watchlists for organizations/domains/VIPs
 - Threat actor profiles

@@ -149,6 +149,8 @@ pub enum Screen {
     Feeds,
     Alerts,
     Articles,
+    Indicators,
+    EnrichmentQueue,
     Keywords,
     Tags,
     Logs,
@@ -162,6 +164,8 @@ impl std::fmt::Display for Screen {
             Screen::Feeds => write!(f, "Feeds"),
             Screen::Alerts => write!(f, "Alerts"),
             Screen::Articles => write!(f, "Articles"),
+            Screen::Indicators => write!(f, "Indicators"),
+            Screen::EnrichmentQueue => write!(f, "Enrichment Queue"),
             Screen::Keywords => write!(f, "Keywords"),
             Screen::Tags => write!(f, "Tags"),
             Screen::Logs => write!(f, "Logs"),
@@ -483,6 +487,7 @@ pub enum ConfirmDialog {
 pub enum SettingsTab {
     General,
     Notifications,
+    Enrichment,
 }
 
 #[derive(Debug, Clone)]

@@ -3,7 +3,10 @@ use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use crate::config::{AppConfig, Paths};
-use crate::db::{AlertFilter, Db};
+use crate::db::{
+    AlertFilter, Db, EnrichmentJobWithContext, EnrichmentProviderRecord, IndicatorRecord,
+    IndicatorSearch,
+};
 use crate::theme::{get_runtime_theme, Theme};
 use crate::types::*;
 use crate::ui;
@@ -64,6 +67,17 @@ pub struct App {
     pub articles_reader: bool,
     pub articles_scroll: u16,
 
+    // Indicators
+    pub indicators_list: Vec<IndicatorRecord>,
+    pub indicators_selected: usize,
+    pub indicators_filter: String,
+    pub indicators_filter_type: Option<sentinel_ioc::IndicatorType>,
+
+    // Enrichment queue
+    pub enrichment_queue_list: Vec<EnrichmentJobWithContext>,
+    pub enrichment_queue_selected: usize,
+    pub enrichment_queue_filter: String,
+
     // Keywords
     pub keywords_list: Vec<Keyword>,
     pub keyword_tags: HashMap<i64, Vec<Tag>>,
@@ -98,6 +112,8 @@ pub struct App {
     pub settings_retention_days: u32,
     pub settings_theme_name: String,
     pub settings_notifications: Vec<NotificationConfig>,
+    pub settings_enrichment_providers: Vec<EnrichmentProviderRecord>,
+    pub settings_enrichment_provider_selected: usize,
     pub settings_notif_form: bool,
     pub settings_notif_form_data: NotificationForm,
     pub settings_notif_form_edit_id: Option<i64>,
@@ -148,6 +164,13 @@ impl App {
             articles_unread_only: false,
             articles_reader: false,
             articles_scroll: 0,
+            indicators_list: Vec::new(),
+            indicators_selected: 0,
+            indicators_filter: String::new(),
+            indicators_filter_type: None,
+            enrichment_queue_list: Vec::new(),
+            enrichment_queue_selected: 0,
+            enrichment_queue_filter: String::new(),
             keywords_list: Vec::new(),
             keyword_tags: HashMap::new(),
             keywords_selected: 0,
@@ -175,6 +198,8 @@ impl App {
             settings_retention_days: 30,
             settings_theme_name: "dark".to_string(),
             settings_notifications: Vec::new(),
+            settings_enrichment_providers: Vec::new(),
+            settings_enrichment_provider_selected: 0,
             settings_notif_form: false,
             settings_notif_form_data: NotificationForm::default(),
             settings_notif_form_edit_id: None,
@@ -184,6 +209,8 @@ impl App {
         app.refresh_feeds();
         app.refresh_alerts();
         app.refresh_articles();
+        app.refresh_indicators();
+        app.refresh_enrichment_queue();
         app.refresh_keywords();
         app.refresh_tags();
         app.refresh_logs();
@@ -225,6 +252,8 @@ impl App {
             Screen::Feeds => self.refresh_feeds(),
             Screen::Alerts => self.refresh_alerts(),
             Screen::Articles => self.refresh_articles(),
+            Screen::Indicators => self.refresh_indicators(),
+            Screen::EnrichmentQueue => self.refresh_enrichment_queue(),
             Screen::Keywords => self.refresh_keywords(),
             Screen::Tags => self.refresh_tags(),
             Screen::Logs => self.refresh_logs(),
@@ -286,10 +315,12 @@ impl App {
             KeyCode::Char('2') => self.switch_screen(Screen::Feeds),
             KeyCode::Char('3') => self.switch_screen(Screen::Alerts),
             KeyCode::Char('4') => self.switch_screen(Screen::Articles),
-            KeyCode::Char('5') => self.switch_screen(Screen::Keywords),
-            KeyCode::Char('6') => self.switch_screen(Screen::Tags),
-            KeyCode::Char('7') => self.switch_screen(Screen::Logs),
-            KeyCode::Char('8') => self.switch_screen(Screen::Settings),
+            KeyCode::Char('5') => self.switch_screen(Screen::Indicators),
+            KeyCode::Char('6') => self.switch_screen(Screen::EnrichmentQueue),
+            KeyCode::Char('7') => self.switch_screen(Screen::Keywords),
+            KeyCode::Char('8') => self.switch_screen(Screen::Tags),
+            KeyCode::Char('9') => self.switch_screen(Screen::Logs),
+            KeyCode::Char('0') => self.switch_screen(Screen::Settings),
             KeyCode::Char('?') | KeyCode::F(1) => self.show_help = true,
             KeyCode::Char('/') => self.start_filter(),
             KeyCode::Esc => self.handle_esc(),
@@ -392,6 +423,8 @@ impl App {
             Screen::Feeds => &mut self.feeds_filter,
             Screen::Alerts => &mut self.alerts_filter,
             Screen::Articles => &mut self.articles_filter,
+            Screen::Indicators => &mut self.indicators_filter,
+            Screen::EnrichmentQueue => &mut self.enrichment_queue_filter,
             Screen::Keywords => &mut self.keywords_filter,
             Screen::Tags => &mut self.tags_filter,
             Screen::Logs => &mut self.logs_filter,
@@ -409,6 +442,8 @@ impl App {
             Screen::Feeds => self.refresh_feeds(),
             Screen::Alerts => self.refresh_alerts(),
             Screen::Articles => self.refresh_articles(),
+            Screen::Indicators => self.refresh_indicators(),
+            Screen::EnrichmentQueue => self.refresh_enrichment_queue(),
             Screen::Keywords => self.refresh_keywords(),
             Screen::Tags => self.refresh_tags(),
             Screen::Logs => self.refresh_logs(),
@@ -490,6 +525,8 @@ impl App {
             Screen::Feeds => ui::feeds::handle_key(self, key),
             Screen::Alerts => ui::alerts::handle_key(self, key),
             Screen::Articles => ui::articles::handle_key(self, key),
+            Screen::Indicators => ui::indicators::handle_key(self, key),
+            Screen::EnrichmentQueue => ui::enrichment_queue::handle_key(self, key),
             Screen::Keywords => ui::keywords::handle_key(self, key),
             Screen::Tags => ui::tags::handle_key(self, key),
             Screen::Logs => ui::logs::handle_key(self, key),
@@ -519,6 +556,7 @@ impl App {
                 ConfirmDialog::DeleteAlert { id } => {
                     let _ = self.db.delete_alert(id);
                     self.refresh_alerts();
+                    self.refresh_indicators();
                     self.refresh_dashboard();
                     self.set_notification("Alert deleted".into(), NotificationType::Success);
                 }
@@ -530,6 +568,7 @@ impl App {
                                 NotificationType::Success,
                             );
                             self.refresh_alerts();
+                            self.refresh_indicators();
                             self.refresh_dashboard();
                         }
                         Err(e) => {
@@ -549,6 +588,7 @@ impl App {
                             self.alerts_bulk_mode = false;
                             self.alerts_selected_bulk.clear();
                             self.refresh_alerts();
+                            self.refresh_indicators();
                             self.refresh_dashboard();
                             self.set_notification(
                                 format!("Deleted {} alerts", count),
@@ -647,6 +687,26 @@ impl App {
         }
     }
 
+    pub fn refresh_indicators(&mut self) {
+        let search = IndicatorSearch {
+            text: if self.indicators_filter.is_empty() {
+                None
+            } else {
+                Some(self.indicators_filter.clone())
+            },
+            indicator_type: self.indicators_filter_type,
+            limit: Some(500),
+        };
+        if let Ok(indicators) = self.db.search_indicators(&search) {
+            self.indicators_list = indicators;
+        }
+        if self.indicators_selected >= self.indicators_list.len()
+            && !self.indicators_list.is_empty()
+        {
+            self.indicators_selected = self.indicators_list.len() - 1;
+        }
+    }
+
     pub fn fetch_selected_feed(&mut self) {
         let Some(feed) = self
             .feeds_list
@@ -663,8 +723,12 @@ impl App {
             Ok(result) => {
                 let item_count = result.items.len();
                 let keywords = self.db.list_keywords(true).unwrap_or_default();
-                match crate::alert::AlertEngine::process_feed_result(
-                    &self.db, &feed, &result, &keywords,
+                match crate::alert::AlertEngine::process_feed_result_with_config(
+                    &self.db,
+                    &feed,
+                    &result,
+                    &keywords,
+                    &self.config,
                 ) {
                     Ok(alerts) => {
                         let _ = self.db.update_feed_health(
@@ -680,6 +744,7 @@ impl App {
                         self.refresh_feeds();
                         self.refresh_articles();
                         self.refresh_alerts();
+                        self.refresh_indicators();
                         self.refresh_dashboard();
                         self.refresh_logs();
                         self.set_notification(
@@ -794,9 +859,48 @@ impl App {
         }
     }
 
+    pub fn refresh_enrichment_queue(&mut self) {
+        if let Ok(jobs) = self.db.list_enrichment_jobs(500) {
+            let query = self.enrichment_queue_filter.to_lowercase();
+            self.enrichment_queue_list = jobs
+                .into_iter()
+                .filter(|job| {
+                    query.is_empty()
+                        || job.provider_name.to_lowercase().contains(&query)
+                        || job.provider_type.to_lowercase().contains(&query)
+                        || job.status.to_lowercase().contains(&query)
+                        || job.indicator_value.to_lowercase().contains(&query)
+                        || format!("{:?}", job.indicator_type)
+                            .to_lowercase()
+                            .contains(&query)
+                        || job
+                            .error_message
+                            .as_deref()
+                            .unwrap_or("")
+                            .to_lowercase()
+                            .contains(&query)
+                })
+                .collect();
+        }
+        if self.enrichment_queue_selected >= self.enrichment_queue_list.len()
+            && !self.enrichment_queue_list.is_empty()
+        {
+            self.enrichment_queue_selected = self.enrichment_queue_list.len() - 1;
+        }
+    }
+
     pub fn refresh_settings(&mut self) {
         if let Ok(notifs) = self.db.list_notifications() {
             self.settings_notifications = notifs;
+        }
+        if let Ok(providers) = self.db.list_enrichment_providers() {
+            self.settings_enrichment_providers = providers;
+        }
+        if self.settings_enrichment_provider_selected >= self.settings_enrichment_providers.len()
+            && !self.settings_enrichment_providers.is_empty()
+        {
+            self.settings_enrichment_provider_selected =
+                self.settings_enrichment_providers.len() - 1;
         }
         self.settings_retention_days = self.config.alert_retention_days;
         self.settings_theme_name = self.config.theme.clone();

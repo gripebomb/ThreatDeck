@@ -115,7 +115,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(app.theme.border)),
     )
-    .highlight_style(selected_style());
+    .row_highlight_style(selected_style());
     f.render_stateful_widget(table, chunks[1], &mut table_state);
 
     let status_text = if app.keywords_show_form && app.input_mode == InputMode::Typing {
@@ -123,7 +123,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     } else if app.filter_active {
         "-- FILTER -- Type search | [Enter] Keep | [Esc] Clear".to_string()
     } else {
-        "-- NORMAL -- [1-8] Nav  [a] Add  [e] Edit  [d] Delete  [t] Test  [Space] Toggle  [/] Filter  [?] Help  [q] Quit".to_string()
+        "-- NORMAL -- [1-9,0] Nav  [a] Add  [e] Edit  [d] Delete  [t] Test  [Space] Toggle  [/] Filter  [?] Help  [q] Quit".to_string()
     };
     let status = Paragraph::new(status_text).style(Style::default().fg(app.theme.muted));
     f.render_widget(status, chunks[2]);

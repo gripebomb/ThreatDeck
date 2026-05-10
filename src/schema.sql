@@ -59,6 +59,111 @@ CREATE INDEX IF NOT EXISTS idx_alerts_detected ON alerts(detected_at);
 CREATE INDEX IF NOT EXISTS idx_alerts_read ON alerts(read);
 CREATE INDEX IF NOT EXISTS idx_alerts_hash ON alerts(content_hash);
 
+CREATE TABLE IF NOT EXISTS indicators (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    indicator_type TEXT NOT NULL,
+    value TEXT NOT NULL,
+    normalized_value TEXT NOT NULL,
+    first_seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_seen_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    sighting_count INTEGER NOT NULL DEFAULT 1,
+    confidence_score INTEGER,
+    risk_score INTEGER,
+    metadata_json TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(indicator_type, normalized_value)
+);
+CREATE INDEX IF NOT EXISTS idx_indicators_type ON indicators(indicator_type);
+CREATE INDEX IF NOT EXISTS idx_indicators_normalized ON indicators(normalized_value);
+CREATE INDEX IF NOT EXISTS idx_indicators_last_seen ON indicators(last_seen_at DESC);
+
+CREATE TABLE IF NOT EXISTS indicator_occurrences (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    indicator_id INTEGER NOT NULL,
+    content_item_id INTEGER,
+    alert_id INTEGER,
+    feed_id INTEGER,
+    source_field TEXT,
+    start_offset INTEGER,
+    end_offset INTEGER,
+    surrounding_text TEXT,
+    detected_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(indicator_id) REFERENCES indicators(id) ON DELETE CASCADE,
+    FOREIGN KEY(content_item_id) REFERENCES feed_items(id) ON DELETE CASCADE,
+    FOREIGN KEY(alert_id) REFERENCES alerts(id) ON DELETE CASCADE,
+    FOREIGN KEY(feed_id) REFERENCES feeds(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_indicator_occurrences_indicator ON indicator_occurrences(indicator_id);
+CREATE INDEX IF NOT EXISTS idx_indicator_occurrences_alert ON indicator_occurrences(alert_id);
+CREATE INDEX IF NOT EXISTS idx_indicator_occurrences_content_item ON indicator_occurrences(content_item_id);
+CREATE INDEX IF NOT EXISTS idx_indicator_occurrences_feed ON indicator_occurrences(feed_id);
+
+CREATE TABLE IF NOT EXISTS alert_indicators (
+    alert_id INTEGER NOT NULL,
+    indicator_id INTEGER NOT NULL,
+    relationship TEXT NOT NULL DEFAULT 'observed',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY(alert_id, indicator_id),
+    FOREIGN KEY(alert_id) REFERENCES alerts(id) ON DELETE CASCADE,
+    FOREIGN KEY(indicator_id) REFERENCES indicators(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_alert_indicators_indicator ON alert_indicators(indicator_id);
+
+CREATE TABLE IF NOT EXISTS enrichment_providers (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    provider_type TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    config_json TEXT,
+    secret_ref TEXT,
+    rate_limit_per_minute INTEGER,
+    supports_types_json TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_enrichment_providers_enabled ON enrichment_providers(enabled);
+
+CREATE TABLE IF NOT EXISTS enrichment_jobs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    indicator_id INTEGER NOT NULL,
+    provider_id INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    priority INTEGER NOT NULL DEFAULT 100,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_attempt_at TIMESTAMP,
+    error_message TEXT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(indicator_id) REFERENCES indicators(id) ON DELETE CASCADE,
+    FOREIGN KEY(provider_id) REFERENCES enrichment_providers(id) ON DELETE CASCADE,
+    UNIQUE(indicator_id, provider_id)
+);
+CREATE INDEX IF NOT EXISTS idx_enrichment_jobs_status_next ON enrichment_jobs(status, next_attempt_at, priority);
+CREATE INDEX IF NOT EXISTS idx_enrichment_jobs_indicator ON enrichment_jobs(indicator_id);
+CREATE INDEX IF NOT EXISTS idx_enrichment_jobs_provider ON enrichment_jobs(provider_id);
+
+CREATE TABLE IF NOT EXISTS enrichment_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    indicator_id INTEGER NOT NULL,
+    provider_id INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    reputation TEXT,
+    score INTEGER,
+    verdict TEXT,
+    summary TEXT,
+    raw_json TEXT,
+    fetched_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    expires_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(indicator_id) REFERENCES indicators(id) ON DELETE CASCADE,
+    FOREIGN KEY(provider_id) REFERENCES enrichment_providers(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_enrichment_results_indicator ON enrichment_results(indicator_id, fetched_at DESC);
+CREATE INDEX IF NOT EXISTS idx_enrichment_results_provider ON enrichment_results(provider_id);
+
 CREATE TABLE IF NOT EXISTS feed_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     feed_id INTEGER NOT NULL,

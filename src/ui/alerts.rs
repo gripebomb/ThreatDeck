@@ -115,7 +115,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(app.theme.border)),
     )
-    .highlight_style(selected_style());
+    .row_highlight_style(selected_style());
     f.render_stateful_widget(table, chunks[1], &mut table_state);
 
     let status_text = if app.filter_active {
@@ -123,7 +123,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     } else if app.alerts_bulk_mode {
         "-- BULK -- [Space] Select  [a] All  [d] Delete selected  [Esc] Cancel"
     } else {
-        "-- NORMAL -- [1-8] Nav  [r] Read  [R] All read  [d] Delete  [D] Bulk  [c] Crit  [Enter] Detail  [/] Filter  [?] Help  [q] Quit"
+        "-- NORMAL -- [1-9,0] Nav  [r] Read  [R] All read  [d] Delete  [D] Bulk  [c] Crit  [Enter] Detail  [/] Filter  [?] Help  [q] Quit"
     };
     let status = Paragraph::new(status_text).style(Style::default().fg(app.theme.muted));
     f.render_widget(status, chunks[2]);
@@ -252,6 +252,10 @@ fn draw_detail(f: &mut Frame, app: &App) {
         .title("Alert Detail - Esc to close")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(app.theme.primary));
+    let detail_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(8), Constraint::Length(9)])
+        .split(detail_area);
     let lines = [
         format!(
             "Title: {}",
@@ -290,7 +294,79 @@ fn draw_detail(f: &mut Frame, app: &App) {
         .block(block)
         .style(Style::default().fg(app.theme.fg).bg(app.theme.surface))
         .wrap(ratatui::widgets::Wrap { trim: false });
-    f.render_widget(para, detail_area);
+    f.render_widget(para, detail_chunks[0]);
+    draw_indicator_panel(f, app, detail_chunks[1], alert.alert.id);
+}
+
+fn draw_indicator_panel(f: &mut Frame, app: &App, area: ratatui::layout::Rect, alert_id: i64) {
+    let block = Block::default()
+        .title("Indicators")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(app.theme.border));
+    let indicators = app
+        .db
+        .list_indicators_for_alert(alert_id)
+        .unwrap_or_default();
+    if indicators.is_empty() {
+        let empty = Paragraph::new("No indicators extracted for this alert.")
+            .block(block)
+            .style(Style::default().fg(app.theme.muted).bg(app.theme.surface));
+        f.render_widget(empty, area);
+        return;
+    }
+
+    let header = Row::new(vec!["Type", "Value", "Sightings", "Reputation"]).style(
+        Style::default()
+            .fg(app.theme.primary)
+            .add_modifier(Modifier::BOLD),
+    );
+    let rows = indicators.iter().take(6).map(|indicator| {
+        let enrichment_results = app
+            .db
+            .get_latest_enrichment_results(indicator.id)
+            .unwrap_or_default();
+        Row::new(vec![
+            Cell::from(indicator_type_label(indicator.indicator_type)),
+            Cell::from(truncate_chars(&indicator.normalized_value, 56)),
+            Cell::from(indicator.sighting_count.to_string()),
+            Cell::from(crate::ui::indicators::enrichment_reputation_label(
+                &enrichment_results,
+            )),
+        ])
+        .style(Style::default().fg(app.theme.fg))
+    });
+    let table = Table::new(
+        rows,
+        vec![
+            Constraint::Length(12),
+            Constraint::Min(24),
+            Constraint::Length(9),
+            Constraint::Length(12),
+        ],
+    )
+    .header(header)
+    .block(block);
+    f.render_widget(table, area);
+}
+
+fn indicator_type_label(indicator_type: sentinel_ioc::IndicatorType) -> &'static str {
+    match indicator_type {
+        sentinel_ioc::IndicatorType::Ipv4 => "IPv4",
+        sentinel_ioc::IndicatorType::Ipv6 => "IPv6",
+        sentinel_ioc::IndicatorType::Domain => "Domain",
+        sentinel_ioc::IndicatorType::Url => "URL",
+        sentinel_ioc::IndicatorType::Email => "Email",
+        sentinel_ioc::IndicatorType::Md5 => "MD5",
+        sentinel_ioc::IndicatorType::Sha1 => "SHA1",
+        sentinel_ioc::IndicatorType::Sha256 => "SHA256",
+        sentinel_ioc::IndicatorType::Cve => "CVE",
+        sentinel_ioc::IndicatorType::MitreAttackTechnique => "MITRE",
+        sentinel_ioc::IndicatorType::OnionDomain => "Onion",
+        sentinel_ioc::IndicatorType::OnionUrl => "Onion URL",
+        sentinel_ioc::IndicatorType::CryptoWallet => "Wallet",
+        sentinel_ioc::IndicatorType::CloudAccessKey => "Cloud Key",
+        sentinel_ioc::IndicatorType::Unknown => "Unknown",
+    }
 }
 
 fn truncate_chars(value: &str, max_chars: usize) -> String {
@@ -345,15 +421,32 @@ mod tests {
             })
             .unwrap();
         let snippet = format!("{}é and more alert text", "a".repeat(39));
-        db.create_alert(&AlertCreate {
-            feed_id,
-            keyword_id,
-            title: Some("Unicode alert".into()),
-            content_snippet: snippet,
-            criticality: Criticality::High,
-            content_hash: "unicode-alert-hash".into(),
-            metadata_json: None,
-        })
+        let alert_id = db
+            .create_alert(&AlertCreate {
+                feed_id,
+                keyword_id,
+                title: Some("Unicode alert".into()),
+                content_snippet: snippet,
+                criticality: Criticality::High,
+                content_hash: "unicode-alert-hash".into(),
+                metadata_json: None,
+            })
+            .unwrap();
+        db.store_extracted_indicators(
+            &[sentinel_ioc::ExtractedIndicator {
+                indicator_type: sentinel_ioc::IndicatorType::Cve,
+                value: "CVE-2025-12345".into(),
+                normalized_value: "CVE-2025-12345".into(),
+                source_field: "content_snippet".into(),
+                start_offset: 0,
+                end_offset: 14,
+                surrounding_text: "CVE-2025-12345".into(),
+                confidence_hint: Some(90),
+            }],
+            Some(alert_id),
+            None,
+            Some(feed_id),
+        )
         .unwrap();
 
         let paths = Paths {
@@ -364,6 +457,7 @@ mod tests {
         };
         let mut app = App::new(db, AppConfig::default(), paths);
         app.screen = crate::types::Screen::Alerts;
+        app.alerts_detail_view = true;
         let backend = TestBackend::new(100, 30);
         let mut terminal = Terminal::new(backend).unwrap();
 

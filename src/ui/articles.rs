@@ -99,13 +99,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(app.theme.border)),
     )
-    .highlight_style(selected_style());
+    .row_highlight_style(selected_style());
     f.render_stateful_widget(table, chunks[1], &mut table_state);
 
     let status_text = if app.filter_active {
         "-- FILTER -- Type search | [Enter] Keep | [Esc] Clear"
     } else {
-        "-- NORMAL -- [1-8] Nav  [Enter] Read/fetch  [r] Toggle read  [u] Unread only  [/] Filter  [?] Help  [q] Quit"
+        "-- NORMAL -- [1-9,0] Nav  [Enter] Read/fetch  [r] Toggle read  [u] Unread only  [/] Filter  [?] Help  [q] Quit"
     };
     f.render_widget(
         Paragraph::new(status_text).style(Style::default().fg(app.theme.muted)),
@@ -241,6 +241,10 @@ fn draw_reader(f: &mut Frame, app: &App, area: Rect) {
         height: area.height * 3 / 4,
     };
     f.render_widget(Clear, reader_area);
+    let reader_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(10), Constraint::Length(8)])
+        .split(reader_area);
 
     let published = article
         .item
@@ -277,7 +281,59 @@ fn draw_reader(f: &mut Frame, app: &App, area: Rect) {
         .style(Style::default().fg(app.theme.fg).bg(app.theme.bg))
         .wrap(Wrap { trim: false })
         .scroll((app.articles_scroll, 0));
-    f.render_widget(paragraph, reader_area);
+    f.render_widget(paragraph, reader_chunks[0]);
+    draw_article_indicators(f, app, reader_chunks[1], article.item.id);
+}
+
+fn draw_article_indicators(f: &mut Frame, app: &App, area: Rect, content_item_id: i64) {
+    let block = Block::default()
+        .title("Indicators")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(app.theme.border));
+    let indicators = app
+        .db
+        .list_indicators_for_content_item(content_item_id)
+        .unwrap_or_default();
+    if indicators.is_empty() {
+        let empty = Paragraph::new("No indicators extracted for this article.")
+            .block(block)
+            .style(Style::default().fg(app.theme.muted).bg(app.theme.surface));
+        f.render_widget(empty, area);
+        return;
+    }
+
+    let header = Row::new(vec!["Type", "Value", "Reputation", "Sightings"]).style(
+        Style::default()
+            .fg(app.theme.primary)
+            .add_modifier(Modifier::BOLD),
+    );
+    let rows = indicators.iter().take(5).map(|indicator| {
+        let enrichment_results = app
+            .db
+            .get_latest_enrichment_results(indicator.id)
+            .unwrap_or_default();
+        Row::new(vec![
+            Cell::from(indicator_type_label(indicator.indicator_type)),
+            Cell::from(truncate_chars(&indicator.normalized_value, 56)),
+            Cell::from(crate::ui::indicators::enrichment_reputation_label(
+                &enrichment_results,
+            )),
+            Cell::from(indicator.sighting_count.to_string()),
+        ])
+        .style(Style::default().fg(app.theme.fg))
+    });
+    let table = Table::new(
+        rows,
+        vec![
+            Constraint::Length(12),
+            Constraint::Min(26),
+            Constraint::Length(14),
+            Constraint::Length(9),
+        ],
+    )
+    .header(header)
+    .block(block);
+    f.render_widget(table, area);
 }
 
 pub fn clean_article_text(input: &str) -> String {
@@ -304,6 +360,36 @@ pub fn clean_article_text(input: &str) -> String {
     out.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+fn indicator_type_label(indicator_type: sentinel_ioc::IndicatorType) -> &'static str {
+    match indicator_type {
+        sentinel_ioc::IndicatorType::Ipv4 => "IPv4",
+        sentinel_ioc::IndicatorType::Ipv6 => "IPv6",
+        sentinel_ioc::IndicatorType::Domain => "Domain",
+        sentinel_ioc::IndicatorType::Url => "URL",
+        sentinel_ioc::IndicatorType::Email => "Email",
+        sentinel_ioc::IndicatorType::Md5 => "MD5",
+        sentinel_ioc::IndicatorType::Sha1 => "SHA1",
+        sentinel_ioc::IndicatorType::Sha256 => "SHA256",
+        sentinel_ioc::IndicatorType::Cve => "CVE",
+        sentinel_ioc::IndicatorType::MitreAttackTechnique => "MITRE",
+        sentinel_ioc::IndicatorType::OnionDomain => "Onion",
+        sentinel_ioc::IndicatorType::OnionUrl => "Onion URL",
+        sentinel_ioc::IndicatorType::CryptoWallet => "Wallet",
+        sentinel_ioc::IndicatorType::CloudAccessKey => "Cloud Key",
+        sentinel_ioc::IndicatorType::Unknown => "Unknown",
+    }
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    let mut chars = value.chars();
+    let truncated: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        format!("{}...", truncated)
+    } else {
+        value.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,5 +400,10 @@ mod tests {
             clean_article_text("<p>Hello&nbsp;<b>world</b>&amp; teams</p>"),
             "Hello world & teams"
         );
+    }
+
+    #[test]
+    fn truncate_chars_handles_multibyte_text() {
+        assert_eq!(truncate_chars("éééé", 2), "éé...");
     }
 }

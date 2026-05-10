@@ -108,13 +108,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(app.theme.border)),
     )
-    .highlight_style(selected_style());
+    .row_highlight_style(selected_style());
     f.render_stateful_widget(table, chunks[1], &mut table_state);
 
     let status_text = if app.filter_active {
         "-- FILTER -- Type search | [Enter] Keep | [Esc] Clear"
     } else {
-        "-- NORMAL -- [1-8] Nav  [f] Cycle feed  [c] Clear feed  [r] Refresh  [/] Filter  [?] Help  [q] Quit"
+        "-- NORMAL -- [1-9,0] Nav  [f] Cycle feed  [c] Clear feed  [r] Refresh  [/] Filter  [?] Help  [q] Quit"
     };
     let status = Paragraph::new(status_text).style(Style::default().fg(app.theme.muted));
     f.render_widget(status, chunks[2]);
