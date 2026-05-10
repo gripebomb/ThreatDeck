@@ -47,8 +47,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "time", "sync"] }
 scraper = "0.22"
 atom_syndication = "0.12"
 rss = "2"
-sentinel-enrichment = { path = "crates/sentinel-enrichment" }
-sentinel-ioc = { path = "crates/sentinel-ioc" }
+sentinel-enrichment = { version = "0.1.0", path = "crates/sentinel-enrichment" }
+sentinel-ioc = { version = "0.1.0", path = "crates/sentinel-ioc" }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
