@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 description = "Provider-neutral IOC enrichment types and test providers for ThreatDeck"
 license = "MIT"
+repository = "https://github.com/gripebomb/ThreatDeck"
+readme = "README.md"
 
 [dependencies]
 async-trait = "0.1"

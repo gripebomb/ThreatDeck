@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 description = "Pure IOC extraction and normalization logic for ThreatDeck"
 license = "MIT"
+repository = "https://github.com/gripebomb/ThreatDeck"
+readme = "README.md"
 
 [dependencies]
 regex = "1"
