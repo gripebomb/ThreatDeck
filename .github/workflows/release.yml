@@ -31,11 +31,11 @@ jobs:
             target: x86_64-unknown-linux-gnu
             artifact_name: ThreatDeck-x86_64-linux
 
-          - os: macos-13
+          - os: macos-15-intel
             target: x86_64-apple-darwin
             artifact_name: ThreatDeck-x86_64-macos
 
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
             artifact_name: ThreatDeck-aarch64-macos
 
