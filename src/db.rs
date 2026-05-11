@@ -188,7 +188,7 @@ impl Db {
     }
 
     fn ensure_builtin_enrichment_providers(&self) -> Result<()> {
-        self.create_enrichment_provider(&EnrichmentProviderCreate {
+        self.create_enrichment_provider_if_missing(&EnrichmentProviderCreate {
             name: "cisa-kev".into(),
             provider_type: "cisa_kev".into(),
             enabled: true,
@@ -196,6 +196,21 @@ impl Db {
             secret_ref: None,
             rate_limit_per_minute: None,
             supports_types: vec![IndicatorType::Cve],
+        })?;
+        self.create_enrichment_provider_if_missing(&EnrichmentProviderCreate {
+            name: "urlhaus".into(),
+            provider_type: "urlhaus".into(),
+            enabled: false,
+            config_json: Some(r#"{"cache_ttl_hours":12}"#.into()),
+            secret_ref: Some("env:URLHAUS_AUTH_KEY".into()),
+            rate_limit_per_minute: Some(30),
+            supports_types: vec![
+                IndicatorType::Url,
+                IndicatorType::Domain,
+                IndicatorType::Ipv4,
+                IndicatorType::Md5,
+                IndicatorType::Sha256,
+            ],
         })?;
         Ok(())
     }
@@ -1145,6 +1160,25 @@ impl Db {
                 |row| row.get(0),
             )
             .map_err(Into::into)
+    }
+
+    pub fn create_enrichment_provider_if_missing(
+        &self,
+        provider: &EnrichmentProviderCreate,
+    ) -> Result<i64> {
+        if let Some(id) = self
+            .conn
+            .query_row(
+                "SELECT id FROM enrichment_providers WHERE name = ?1",
+                [provider.name.as_str()],
+                |row| row.get(0),
+            )
+            .optional()?
+        {
+            return Ok(id);
+        }
+
+        self.create_enrichment_provider(provider)
     }
 
     pub fn update_enrichment_provider(&self, provider: &EnrichmentProviderUpdate) -> Result<()> {
@@ -2563,17 +2597,36 @@ mod tests {
     }
 
     #[test]
-    fn init_schema_seeds_builtin_cisa_kev_provider() {
+    fn init_schema_seeds_builtin_enrichment_providers() {
         let db = memory_db();
         db.init_schema().unwrap();
 
-        let providers = db.list_enabled_enrichment_providers().unwrap();
+        let providers = db.list_enrichment_providers().unwrap();
         let cisa = providers
             .iter()
             .find(|provider| provider.name == "cisa-kev")
             .expect("CISA KEV provider seeded");
         assert_eq!(cisa.provider_type, "cisa_kev");
         assert_eq!(cisa.supports_types, vec![IndicatorType::Cve]);
+        assert!(cisa.enabled);
+
+        let urlhaus = providers
+            .iter()
+            .find(|provider| provider.name == "urlhaus")
+            .expect("URLHaus provider seeded");
+        assert_eq!(urlhaus.provider_type, "urlhaus");
+        assert_eq!(
+            urlhaus.supports_types,
+            vec![
+                IndicatorType::Url,
+                IndicatorType::Domain,
+                IndicatorType::Ipv4,
+                IndicatorType::Md5,
+                IndicatorType::Sha256,
+            ]
+        );
+        assert!(!urlhaus.enabled);
+        assert_eq!(urlhaus.secret_ref.as_deref(), Some("env:URLHAUS_AUTH_KEY"));
     }
 }
 

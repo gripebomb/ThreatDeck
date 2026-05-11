@@ -635,6 +635,36 @@ fn provider_health_message(
                 .map(|_| format!("CISA KEV cache is valid: {}", path.display()))
                 .map_err(|e| format!("CISA KEV cache failed validation: {}", e))
         }
+        "urlhaus" => {
+            if provider
+                .secret_ref
+                .as_deref()
+                .is_some_and(|secret_ref| secret_ref.starts_with("env:"))
+            {
+                let env_name = provider
+                    .secret_ref
+                    .as_deref()
+                    .unwrap_or_default()
+                    .trim_start_matches("env:");
+                if std::env::var(env_name).is_ok() {
+                    Ok(format!(
+                        "URLHaus Auth-Key environment variable {env_name} is set"
+                    ))
+                } else {
+                    Err(format!(
+                        "URLHaus Auth-Key environment variable {env_name} is not set"
+                    ))
+                }
+            } else if provider
+                .secret_ref
+                .as_deref()
+                .is_some_and(|value| !value.is_empty())
+            {
+                Ok("URLHaus Auth-Key is configured in provider secret_ref".into())
+            } else {
+                Err("URLHaus Auth-Key is required; set secret_ref to env:URLHAUS_AUTH_KEY".into())
+            }
+        }
         _ => Err(format!(
             "No local health check available for {}",
             provider.name
@@ -874,6 +904,16 @@ mod tests {
         }
     }
 
+    fn provider_with_secret(
+        provider_type: &str,
+        secret_ref: Option<&str>,
+    ) -> EnrichmentProviderRecord {
+        EnrichmentProviderRecord {
+            secret_ref: secret_ref.map(str::to_string),
+            ..provider(provider_type)
+        }
+    }
+
     #[test]
     fn provider_health_reports_missing_cisa_cache() {
         let dir = std::env::temp_dir().join(format!(
@@ -886,8 +926,18 @@ mod tests {
     }
 
     #[test]
+    fn provider_health_reports_missing_urlhaus_auth_key() {
+        let message = provider_health_message(
+            &provider_with_secret("urlhaus", Some("env:THREATDECK_TEST_MISSING_URLHAUS_KEY")),
+            std::path::Path::new("/tmp"),
+        )
+        .unwrap_err();
+        assert!(message.contains("not set"));
+    }
+
+    #[test]
     fn provider_health_reports_unsupported_provider() {
-        let message = provider_health_message(&provider("urlhaus"), std::path::Path::new("/tmp"))
+        let message = provider_health_message(&provider("unknown"), std::path::Path::new("/tmp"))
             .unwrap_err();
         assert!(message.contains("No local health check"));
     }

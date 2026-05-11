@@ -7,8 +7,10 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 mod cisa_kev;
+mod urlhaus;
 
 pub use cisa_kev::CisaKevProvider;
+pub use urlhaus::UrlHausProvider;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Reputation {

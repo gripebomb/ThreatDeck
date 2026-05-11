@@ -1,6 +1,8 @@
 use crate::db::Db;
 use anyhow::{Context, Result};
-use sentinel_enrichment::{CisaKevProvider, EnrichmentProvider, EnrichmentRequest, ProviderConfig};
+use sentinel_enrichment::{
+    CisaKevProvider, EnrichmentProvider, EnrichmentRequest, ProviderConfig, UrlHausProvider,
+};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -32,6 +34,7 @@ impl EnrichmentWorker {
                     .with_context(|| format!("loading {}", cisa_kev_path.display()))?,
             ));
         }
+        providers.push(Arc::new(UrlHausProvider::new()));
         Ok(Self::new(providers))
     }
 

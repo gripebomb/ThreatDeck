@@ -155,6 +155,23 @@ enabled = true
 enrich_only_alert_indicators = false
 ```
 
+### Enrichment Providers
+
+ThreatDeck seeds local provider records for CISA KEV and URLHaus.
+
+- `cisa-kev` is enabled by default and uses a local `cisa-kev.json` cache in the ThreatDeck data directory.
+- `urlhaus` is disabled by default because it sends selected URL, domain, IPv4, MD5, and SHA256 indicators to the external URLHaus API.
+
+To use URLHaus, create a free URLHaus Auth-Key, export it before starting ThreatDeck, then enable the provider:
+
+```bash
+export URLHAUS_AUTH_KEY="your-auth-key"
+ThreatDeck --enable-provider urlhaus
+ThreatDeck --enrich-once
+```
+
+The Settings screen provider health check reports whether `URLHAUS_AUTH_KEY` is available.
+
 ### Theme Settings
 
 Change themes dynamically via the Settings screen (`0`) or edit `config.toml` directly:
@@ -500,7 +517,7 @@ The application uses the following SQLite schema (see `src/schema.sql`):
 
 ## Upcoming Features
 
-- Additional enrichment providers (URLHaus, AbuseIPDB, GreyNoise, VirusTotal, RDAP, DNS)
+- Additional enrichment providers (AbuseIPDB, GreyNoise, VirusTotal, RDAP, DNS)
 - Terminal-native case management
 - Watchlists for organizations/domains/VIPs
 - Threat actor profiles

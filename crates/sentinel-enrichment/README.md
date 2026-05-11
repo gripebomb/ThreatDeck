@@ -21,6 +21,7 @@ sentinel-ioc = "0.1.0"
 - `ProviderConfig`, a serializable config structure for provider settings, rate limits, cache TTLs, and secret references.
 - `MockProvider`, a deterministic provider for tests and local queue validation.
 - `CisaKevProvider`, a local CISA Known Exploited Vulnerabilities catalog provider for CVE indicators.
+- `UrlHausProvider`, an external URLHaus API provider for URL, domain, IPv4, MD5, and SHA256 indicators.
 
 ## Example: Mock Provider
 
@@ -93,6 +94,8 @@ assert_eq!(result.verdict.as_deref(), Some("Known Exploited"));
 Providers declare their supported `IndicatorType` values and should return `EnrichmentError::UnsupportedIndicatorType` for unsupported requests. Callers are expected to manage persistence, queueing, retries, rate limits, and cache freshness around provider execution.
 
 The included `CisaKevProvider` is local-file/local-string based. It does not fetch the CISA KEV catalog over the network.
+
+`UrlHausProvider` calls the URLHaus API and requires an Auth-Key. Set `ProviderConfig.secret_ref` to `env:URLHAUS_AUTH_KEY` to read the key from the environment, or pass `auth_key` in `ProviderConfig.values` for controlled test/local use. The provider queries URL, host, and payload endpoints depending on the indicator type.
 
 ## License
 
