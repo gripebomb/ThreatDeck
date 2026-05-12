@@ -2,7 +2,9 @@ use crossterm::event::{KeyCode, KeyEvent};
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
+use crate::auto_fetch::{AutoFetchMessage, AutoFetcher};
 use crate::config::{AppConfig, Paths};
+use std::sync::mpsc;
 use crate::db::{
     AlertFilter, Db, EnrichmentJobWithContext, EnrichmentProviderRecord, IndicatorRecord,
     IndicatorSearch,
@@ -130,6 +132,12 @@ pub struct App {
     pub settings_notif_form_data: NotificationForm,
     pub settings_notif_form_edit_id: Option<i64>,
     pub settings_cleanup_preview: Option<u64>,
+
+    // Auto-fetch
+    pub auto_fetcher: Option<AutoFetcher>,
+    pub auto_fetch_rx: Option<mpsc::Receiver<AutoFetchMessage>>,
+    pub settings_auto_fetch_enabled: bool,
+    pub settings_auto_fetch_interval: u32,
 }
 
 impl App {
@@ -228,6 +236,10 @@ impl App {
             settings_notif_form_data: NotificationForm::default(),
             settings_notif_form_edit_id: None,
             settings_cleanup_preview: None,
+            auto_fetcher: None,
+            auto_fetch_rx: None,
+            settings_auto_fetch_enabled: false,
+            settings_auto_fetch_interval: 30,
         };
         app.refresh_dashboard();
         app.refresh_feeds();
@@ -239,6 +251,19 @@ impl App {
         app.refresh_tags();
         app.refresh_logs();
         app.refresh_settings();
+        app.settings_auto_fetch_enabled = app.config.auto_fetch.enabled;
+        app.settings_auto_fetch_interval = app.config.auto_fetch.interval_minutes;
+
+        if app.config.auto_fetch.enabled {
+            let (tx, rx) = mpsc::channel();
+            let fetcher = AutoFetcher::spawn(
+                app.paths.db_file.clone(),
+                app.config.auto_fetch.interval_minutes,
+                tx,
+            );
+            app.auto_fetcher = Some(fetcher);
+            app.auto_fetch_rx = Some(rx);
+        }
         app
     }
 
@@ -249,6 +274,47 @@ impl App {
             .unwrap_or(false)
         {
             self.clear_notification();
+        }
+
+        if let Some(rx) = &self.auto_fetch_rx {
+            if let Ok(msg) = rx.try_recv() {
+                match msg {
+                    AutoFetchMessage::Completed {
+                        feeds_attempted,
+                        feeds_succeeded,
+                        alerts_created,
+                        errors,
+                    } => {
+                        self.refresh_dashboard();
+                        self.refresh_alerts();
+                        self.refresh_articles();
+                        self.refresh_indicators();
+                        self.refresh_feeds();
+                        self.refresh_logs();
+
+                        let mut msg_text = format!(
+                            "Auto-fetched {}/{} feed(s), created {} alert(s)",
+                            feeds_succeeded, feeds_attempted, alerts_created
+                        );
+                        let notif_type = if errors.is_empty() {
+                            crate::types::NotificationType::Success
+                        } else {
+                            msg_text.push_str(&format!(
+                                " ({} error(s) — check logs)",
+                                errors.len()
+                            ));
+                            crate::types::NotificationType::Warning
+                        };
+                        self.set_notification(msg_text, notif_type);
+                    }
+                    AutoFetchMessage::Stopped => {
+                        self.set_notification(
+                            "Auto-fetch stopped".to_string(),
+                            crate::types::NotificationType::Info,
+                        );
+                    }
+                }
+            }
         }
     }
 
@@ -949,5 +1015,33 @@ impl App {
         }
         self.settings_retention_days = self.config.alert_retention_days;
         self.settings_theme_name = self.config.theme.clone();
+    }
+
+    pub fn start_auto_fetch(&mut self) {
+        if self.auto_fetcher.is_some() {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let fetcher = AutoFetcher::spawn(
+            self.paths.db_file.clone(),
+            self.settings_auto_fetch_interval,
+            tx,
+        );
+        self.auto_fetcher = Some(fetcher);
+        self.auto_fetch_rx = Some(rx);
+    }
+
+    pub fn stop_auto_fetch(&mut self) {
+        if let Some(fetcher) = self.auto_fetcher.take() {
+            fetcher.stop();
+        }
+        self.auto_fetch_rx = None;
+    }
+
+    pub fn restart_auto_fetch(&mut self) {
+        self.stop_auto_fetch();
+        if self.settings_auto_fetch_enabled {
+            self.start_auto_fetch();
+        }
     }
 }
