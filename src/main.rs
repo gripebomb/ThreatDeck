@@ -359,6 +359,7 @@ fn main() -> Result<()> {
 
     let mut app = app::App::new(db, app_config, paths);
     let res = run_app(&mut terminal, &mut app);
+    app.stop_auto_fetch();
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
