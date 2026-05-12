@@ -1148,9 +1148,10 @@ impl Db {
             .query_row(
                 "SELECT triage_notes FROM alerts WHERE id = ?1",
                 [alert_id],
-                |row| row.get(0),
+                |row| row.get::<_, Option<String>>(0),
             )
-            .optional()?;
+            .optional()?
+            .flatten();
         let new_notes = match existing {
             Some(existing) if !existing.is_empty() => format!("{}\n{}", existing, note),
             _ => note.to_string(),
@@ -3048,6 +3049,156 @@ mod tests {
         );
         assert!(!urlhaus.enabled);
         assert_eq!(urlhaus.secret_ref.as_deref(), Some("env:URLHAUS_AUTH_KEY"));
+    }
+
+    #[test]
+    fn triage_note_is_persisted_and_retrievable() {
+        let db = memory_db();
+        db.init_schema().unwrap();
+
+        let feed_id = db
+            .create_feed(&FeedCreate {
+                name: "Test Feed".into(),
+                url: "https://example.com/feed.xml".into(),
+                feed_type: FeedType::Rss,
+                enabled: true,
+                interval_secs: 300,
+                ..FeedCreate::default()
+            })
+            .unwrap();
+
+        let keyword_id = db
+            .create_keyword(&KeywordCreate {
+                pattern: "breach".into(),
+                criticality: Criticality::High,
+                enabled: true,
+                ..KeywordCreate::default()
+            })
+            .unwrap();
+
+        let alert_id = db
+            .create_alert(&AlertCreate {
+                feed_id,
+                keyword_id,
+                title: Some("Triage note test".into()),
+                content_snippet: "Test content".into(),
+                criticality: Criticality::High,
+                content_hash: "triage-note-hash".into(),
+                metadata_json: None,
+            })
+            .unwrap();
+
+        // Verify defaults
+        let alert = db.get_alert(alert_id).unwrap().unwrap();
+        assert_eq!(alert.status, AlertStatus::New);
+        assert_eq!(alert.disposition, AlertDisposition::Unknown);
+        assert!(alert.triage_notes.is_none());
+
+        // Add a note
+        db.add_alert_note(alert_id, "First investigation note").unwrap();
+
+        // Verify via get_alert
+        let alert = db.get_alert(alert_id).unwrap().unwrap();
+        assert_eq!(
+            alert.triage_notes.as_deref(),
+            Some("First investigation note")
+        );
+
+        // Add second note
+        db.add_alert_note(alert_id, "Second follow-up note").unwrap();
+
+        let alert = db.get_alert(alert_id).unwrap().unwrap();
+        assert!(alert.triage_notes.as_deref().unwrap().contains("First investigation note"));
+        assert!(alert.triage_notes.as_deref().unwrap().contains("Second follow-up note"));
+
+        // Verify via list_alerts
+        let alerts = db.list_alerts(&AlertFilter::default()).unwrap();
+        let found = alerts.iter().find(|a| a.alert.id == alert_id).unwrap();
+        assert_eq!(
+            found.alert.triage_notes.as_deref(),
+            Some(alert.triage_notes.as_deref().unwrap())
+        );
+
+        // Verify history
+        let events = db.list_alert_triage_events(alert_id).unwrap();
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].event_type, "note_added");
+        assert_eq!(events[0].note.as_deref(), Some("First investigation note"));
+        assert_eq!(events[1].event_type, "note_added");
+        assert_eq!(events[1].note.as_deref(), Some("Second follow-up note"));
+    }
+
+    #[test]
+    fn triage_status_transitions_persist_and_log_events() {
+        let db = memory_db();
+        db.init_schema().unwrap();
+
+        let feed_id = db
+            .create_feed(&FeedCreate {
+                name: "Test Feed".into(),
+                url: "https://example.com/feed.xml".into(),
+                feed_type: FeedType::Rss,
+                enabled: true,
+                interval_secs: 300,
+                ..FeedCreate::default()
+            })
+            .unwrap();
+
+        let keyword_id = db
+            .create_keyword(&KeywordCreate {
+                pattern: "breach".into(),
+                criticality: Criticality::High,
+                enabled: true,
+                ..KeywordCreate::default()
+            })
+            .unwrap();
+
+        let alert_id = db
+            .create_alert(&AlertCreate {
+                feed_id,
+                keyword_id,
+                title: Some("Status transition test".into()),
+                content_snippet: "Test content".into(),
+                criticality: Criticality::High,
+                content_hash: "status-transition-hash".into(),
+                metadata_json: None,
+            })
+            .unwrap();
+
+        // Acknowledge
+        db.update_alert_status(alert_id, AlertStatus::Acknowledged, None).unwrap();
+        let alert = db.get_alert(alert_id).unwrap().unwrap();
+        assert_eq!(alert.status, AlertStatus::Acknowledged);
+        assert!(alert.acknowledged_at.is_some());
+
+        // Investigate
+        db.update_alert_status(alert_id, AlertStatus::Investigating, None).unwrap();
+        let alert = db.get_alert(alert_id).unwrap().unwrap();
+        assert_eq!(alert.status, AlertStatus::Investigating);
+        assert!(alert.investigating_at.is_some());
+
+        // Close
+        db.update_alert_disposition(alert_id, AlertDisposition::FalsePositive, None).unwrap();
+        db.close_alert(alert_id, AlertDisposition::FalsePositive, Some("Verified benign")).unwrap();
+        let alert = db.get_alert(alert_id).unwrap().unwrap();
+        assert_eq!(alert.status, AlertStatus::Closed);
+        assert_eq!(alert.disposition, AlertDisposition::FalsePositive);
+        assert!(alert.closed_at.is_some());
+        assert_eq!(alert.closed_reason.as_deref(), Some("Verified benign"));
+
+        // Reopen
+        db.reopen_alert(alert_id, Some("Re-opening for review")).unwrap();
+        let alert = db.get_alert(alert_id).unwrap().unwrap();
+        assert_eq!(alert.status, AlertStatus::Acknowledged);
+        assert!(alert.closed_at.is_none());
+
+        // Verify events
+        let events = db.list_alert_triage_events(alert_id).unwrap();
+        let event_types: Vec<_> = events.iter().map(|e| e.event_type.as_str()).collect();
+        assert!(event_types.contains(&"status_changed"));
+        assert!(event_types.contains(&"disposition_changed"));
+        assert!(event_types.contains(&"closed"));
+        assert!(event_types.contains(&"reopened"));
     }
 }
 
