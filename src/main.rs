@@ -87,6 +87,48 @@ struct Cli {
     /// Extract IOCs from a file and exit without storing them
     #[arg(long)]
     ioc_extract_file: Option<PathBuf>,
+    /// Acknowledge an alert by ID
+    #[arg(long)]
+    alert_acknowledge: Option<i64>,
+    /// Start investigating an alert by ID
+    #[arg(long)]
+    alert_investigate: Option<i64>,
+    /// Escalate an alert by ID
+    #[arg(long)]
+    alert_escalate: Option<i64>,
+    /// Close an alert by ID (requires --disposition)
+    #[arg(long)]
+    alert_close: Option<i64>,
+    /// Set disposition when closing an alert (ConfirmedThreat, FalsePositive, Benign, Duplicate, Informational, NeedsMoreContext)
+    #[arg(long)]
+    disposition: Option<String>,
+    /// Reason or note when closing an alert
+    #[arg(long)]
+    close_reason: Option<String>,
+    /// Reopen a closed alert by ID
+    #[arg(long)]
+    alert_reopen: Option<i64>,
+    /// Add a note to an alert by ID
+    #[arg(long)]
+    alert_note: Option<i64>,
+    /// Note text for --alert-note
+    #[arg(long)]
+    note_text: Option<String>,
+    /// Show triage history for an alert by ID
+    #[arg(long)]
+    alert_history: Option<i64>,
+    /// List alerts with optional filters
+    #[arg(long)]
+    alert_list: bool,
+    /// Filter --alert-list by status
+    #[arg(long)]
+    alert_status: Option<String>,
+    /// Filter --alert-list by disposition
+    #[arg(long)]
+    alert_disposition: Option<String>,
+    /// Filter --alert-list by owner
+    #[arg(long)]
+    alert_owner: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -184,6 +226,122 @@ fn main() -> Result<()> {
             limit: Some(cli.ioc_limit),
         })?;
         print_ioc_export(&db, &indicators, format)?;
+        return Ok(());
+    }
+
+    if let Some(id) = cli.alert_acknowledge {
+        db.update_alert_status(id, crate::types::AlertStatus::Acknowledged, None)?;
+        println!("Alert {id} acknowledged.");
+        return Ok(());
+    }
+    if let Some(id) = cli.alert_investigate {
+        db.update_alert_status(id, crate::types::AlertStatus::Investigating, None)?;
+        println!("Alert {id} marked as investigating.");
+        return Ok(());
+    }
+    if let Some(id) = cli.alert_escalate {
+        db.update_alert_status(id, crate::types::AlertStatus::Escalated, None)?;
+        println!("Alert {id} escalated.");
+        return Ok(());
+    }
+    if let Some(id) = cli.alert_close {
+        let disp_str = cli.disposition.as_deref().unwrap_or("Unknown");
+        let disposition = match disp_str {
+            "ConfirmedThreat" => crate::types::AlertDisposition::ConfirmedThreat,
+            "FalsePositive" => crate::types::AlertDisposition::FalsePositive,
+            "Benign" => crate::types::AlertDisposition::Benign,
+            "Duplicate" => crate::types::AlertDisposition::Duplicate,
+            "Informational" => crate::types::AlertDisposition::Informational,
+            "NeedsMoreContext" => crate::types::AlertDisposition::NeedsMoreContext,
+            _ => crate::types::AlertDisposition::Unknown,
+        };
+        if disposition == crate::types::AlertDisposition::Unknown {
+            anyhow::bail!("Closing an alert requires a non-Unknown disposition. Use --disposition");
+        }
+        db.close_alert(id, disposition, cli.close_reason.as_deref())?;
+        println!("Alert {id} closed as {disp_str}.");
+        return Ok(());
+    }
+    if let Some(id) = cli.alert_reopen {
+        db.reopen_alert(id, None)?;
+        println!("Alert {id} reopened.");
+        return Ok(());
+    }
+    if let Some(id) = cli.alert_note {
+        let note = cli.note_text.as_deref().unwrap_or("");
+        if note.is_empty() {
+            anyhow::bail!("--alert-note requires --note-text");
+        }
+        db.add_alert_note(id, note)?;
+        println!("Note added to alert {id}.");
+        return Ok(());
+    }
+    if let Some(id) = cli.alert_history {
+        let events = db.list_alert_triage_events(id)?;
+        if events.is_empty() {
+            println!("No triage history for alert {id}.");
+        } else {
+            println!("Triage history for alert {id}:");
+            for event in events {
+                let ts = event.created_at.format("%Y-%m-%d %H:%M");
+                let change = match (event.old_value.as_ref(), event.new_value.as_ref()) {
+                    (Some(old), Some(new)) => format!("{old} -> {new}"),
+                    (None, Some(new)) => format!("-> {new}"),
+                    (Some(old), None) => format!("{old} -> (none)"),
+                    (None, None) => String::new(),
+                };
+                let note = event.note.map(|n| format!(" | {n}")).unwrap_or_default();
+                println!("  {ts}  {:20} {}{}", event.event_type, change, note);
+            }
+        }
+        return Ok(());
+    }
+    if cli.alert_list {
+        let status = cli.alert_status.as_deref().map(|s| match s {
+            "New" => crate::types::AlertStatus::New,
+            "Acknowledged" => crate::types::AlertStatus::Acknowledged,
+            "Investigating" => crate::types::AlertStatus::Investigating,
+            "Escalated" => crate::types::AlertStatus::Escalated,
+            "Closed" => crate::types::AlertStatus::Closed,
+            _ => crate::types::AlertStatus::New,
+        });
+        let disposition = cli.alert_disposition.as_deref().map(|s| match s {
+            "ConfirmedThreat" => crate::types::AlertDisposition::ConfirmedThreat,
+            "FalsePositive" => crate::types::AlertDisposition::FalsePositive,
+            "Benign" => crate::types::AlertDisposition::Benign,
+            "Duplicate" => crate::types::AlertDisposition::Duplicate,
+            "Informational" => crate::types::AlertDisposition::Informational,
+            "NeedsMoreContext" => crate::types::AlertDisposition::NeedsMoreContext,
+            _ => crate::types::AlertDisposition::Unknown,
+        });
+        let filter = db::AlertFilter {
+            status,
+            disposition,
+            owner: cli.alert_owner.clone(),
+            limit: Some(100),
+            ..db::AlertFilter::default()
+        };
+        let alerts = db.list_alerts(&filter)?;
+        if alerts.is_empty() {
+            println!("No alerts found.");
+        } else {
+            println!(
+                "{:>6} {:>8} {:>12} {:>14} {:>12} {:>20} {}",
+                "ID", "Severity", "Status", "Disposition", "Owner", "Detected", "Title"
+            );
+            for a in alerts {
+                let sev = format!("{:?}", a.alert.effective_severity());
+                let status = format!("{:?}", a.alert.status);
+                let disp = format!("{:?}", a.alert.disposition);
+                let owner = a.alert.owner.as_deref().unwrap_or("-");
+                let dt = a.alert.detected_at.format("%Y-%m-%d %H:%M");
+                let title = a.alert.title.as_deref().unwrap_or("(untitled)");
+                println!(
+                    "{:>6} {:>8} {:>12} {:>14} {:>12} {:>20} {}",
+                    a.alert.id, sev, status, disp, owner, dt, title
+                );
+            }
+        }
         return Ok(());
     }
 

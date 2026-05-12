@@ -73,6 +73,10 @@ fn draw_stats(f: &mut Frame, app: &App, area: Rect) {
         ])
         .split(area);
 
+    let new_count = app.dashboard_status_counts.get("New").copied().unwrap_or(0);
+    let inv_count = app.dashboard_status_counts.get("Investigating").copied().unwrap_or(0);
+    let esc_count = app.dashboard_status_counts.get("Escalated").copied().unwrap_or(0);
+    let closed_count = app.dashboard_status_counts.get("Closed").copied().unwrap_or(0);
     let stats = [
         (
             "Feeds",
@@ -82,7 +86,7 @@ fn draw_stats(f: &mut Frame, app: &App, area: Rect) {
         (
             "Alerts",
             app.dashboard_stats.total_alerts,
-            format!("{} unread", app.dashboard_stats.unread_alerts),
+            format!("{} new / {} inv / {} esc / {} closed", new_count, inv_count, esc_count, closed_count),
         ),
         (
             "Keywords",

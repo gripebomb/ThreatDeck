@@ -285,6 +285,17 @@ mod tests {
             content_hash: "hash".into(),
             detected_at: Utc::now(),
             metadata_json: None,
+            status: crate::types::AlertStatus::New,
+            disposition: crate::types::AlertDisposition::Unknown,
+            severity_override: None,
+            confidence_score: None,
+            owner: None,
+            triage_notes: None,
+            acknowledged_at: None,
+            investigating_at: None,
+            escalated_at: None,
+            closed_at: None,
+            closed_reason: None,
         }
     }
 

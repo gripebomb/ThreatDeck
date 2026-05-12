@@ -124,5 +124,9 @@ VALUES
     (172, 40), (172, 41), (173, 40), (173, 41), (174, 40), (174, 41),
     (175, 40), (175, 41), (176, 40), (176, 41);
 
+-- Alert triage schema additions (v2026-05-11)
+-- ALTER TABLE statements are applied idempotently in Rust code.
+-- CREATE statements use IF NOT EXISTS.
+
 INSERT OR REPLACE INTO app_meta (key, value)
 VALUES ('catalog_seed_version', 'catalog-v3');

@@ -159,6 +159,68 @@ impl Db {
             self.conn
                 .execute_batch(include_str!("catalog-updates.sql"))?;
         }
+        // Idempotent triage schema migration (v2026-05-11)
+        let _ = self.conn.execute(
+            "ALTER TABLE alerts ADD COLUMN status TEXT NOT NULL DEFAULT 'New'", [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE alerts ADD COLUMN disposition TEXT NOT NULL DEFAULT 'Unknown'", [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE alerts ADD COLUMN severity_override TEXT", [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE alerts ADD COLUMN confidence_score INTEGER", [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE alerts ADD COLUMN owner TEXT", [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE alerts ADD COLUMN triage_notes TEXT", [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE alerts ADD COLUMN acknowledged_at TEXT", [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE alerts ADD COLUMN investigating_at TEXT", [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE alerts ADD COLUMN escalated_at TEXT", [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE alerts ADD COLUMN closed_at TEXT", [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE alerts ADD COLUMN closed_reason TEXT", [],
+        );
+        let _ = self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status)", [],
+        );
+        let _ = self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_alerts_disposition ON alerts(disposition)", [],
+        );
+        let _ = self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_alerts_owner ON alerts(owner)", [],
+        );
+        let _ = self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_alerts_closed_at ON alerts(closed_at)", [],
+        );
+        let _ = self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS alert_triage_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                alert_id INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                old_value TEXT,
+                new_value TEXT,
+                note TEXT,
+                actor TEXT NOT NULL DEFAULT 'local',
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(alert_id) REFERENCES alerts(id) ON DELETE CASCADE
+            )", [],
+        );
+        let _ = self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_triage_events_alert ON alert_triage_events(alert_id, created_at)", [],
+        );
         Ok(())
     }
 
@@ -676,8 +738,8 @@ impl Db {
 
     pub fn create_alert(&self, alert: &AlertCreate) -> Result<i64> {
         self.conn.execute(
-            "INSERT INTO alerts (feed_id, keyword_id, title, content_snippet, criticality, content_hash, metadata_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO alerts (feed_id, keyword_id, title, content_snippet, criticality, content_hash, metadata_json, status, disposition)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'New', 'Unknown')",
             params![
                 alert.feed_id, alert.keyword_id, alert.title, alert.content_snippet,
                 format!("{:?}", alert.criticality), alert.content_hash, alert.metadata_json
@@ -688,7 +750,9 @@ impl Db {
 
     pub fn get_alert(&self, id: i64) -> Result<Option<Alert>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, feed_id, keyword_id, title, content_snippet, criticality, read, content_hash, detected_at, metadata_json
+            "SELECT id, feed_id, keyword_id, title, content_snippet, criticality, read, content_hash, detected_at, metadata_json,
+                    status, disposition, severity_override, confidence_score, owner, triage_notes,
+                    acknowledged_at, investigating_at, escalated_at, closed_at, closed_reason
              FROM alerts WHERE id = ?1"
         )?;
         stmt.query_row([id], Self::row_to_alert)
@@ -724,6 +788,24 @@ impl Db {
                 params_vec.push(Box::new(format!("%{}%", text)));
             }
         }
+        if let Some(status) = &filter.status {
+            conditions.push(format!("a.status = '{status:?}'"));
+        }
+        if let Some(disposition) = &filter.disposition {
+            conditions.push(format!("a.disposition = '{disposition:?}'"));
+        }
+        if let Some(owner) = &filter.owner {
+            if !owner.is_empty() {
+                conditions.push("a.owner LIKE ?".to_string());
+                params_vec.push(Box::new(format!("%{}%", owner)));
+            }
+        }
+        if filter.open_only {
+            conditions.push("a.status != 'Closed'".to_string());
+        }
+        if filter.closed_only {
+            conditions.push("a.status = 'Closed'".to_string());
+        }
 
         let where_clause = if conditions.is_empty() {
             "".to_string()
@@ -733,6 +815,8 @@ impl Db {
 
         let sql = format!(
             "SELECT a.id, a.feed_id, a.keyword_id, a.title, a.content_snippet, a.criticality, a.read, a.content_hash, a.detected_at, a.metadata_json,
+                    a.status, a.disposition, a.severity_override, a.confidence_score, a.owner, a.triage_notes,
+                    a.acknowledged_at, a.investigating_at, a.escalated_at, a.closed_at, a.closed_reason,
                     f.name as feed_name, k.pattern as keyword_pattern
              FROM alerts a
              JOIN feeds f ON a.feed_id = f.id
@@ -743,8 +827,10 @@ impl Db {
 
         let limit = filter.limit.unwrap_or(500);
         let mut stmt = self.conn.prepare(&sql)?;
+        let mut refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+        refs.push(&limit);
         let rows = stmt.query_map(
-            [&limit as &dyn rusqlite::ToSql],
+            rusqlite::params_from_iter(refs),
             Self::row_to_alert_with_meta,
         )?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
@@ -866,6 +952,13 @@ impl Db {
     fn row_to_alert(row: &rusqlite::Row) -> rusqlite::Result<Alert> {
         let criticality_str: String = row.get(5)?;
         let detected_str: String = row.get(8)?;
+        let status_str: String = row.get(10)?;
+        let disposition_str: String = row.get(11)?;
+        let severity_override_str: Option<String> = row.get(12)?;
+        let acknowledged_str: Option<String> = row.get(16)?;
+        let investigating_str: Option<String> = row.get(17)?;
+        let escalated_str: Option<String> = row.get(18)?;
+        let closed_str: Option<String> = row.get(19)?;
         Ok(Alert {
             id: row.get(0)?,
             feed_id: row.get(1)?,
@@ -877,18 +970,346 @@ impl Db {
             content_hash: row.get(7)?,
             detected_at: parse_ts(&detected_str).unwrap_or_else(Utc::now),
             metadata_json: row.get(9)?,
+            status: AlertStatus::from(status_str.as_str()),
+            disposition: AlertDisposition::from(disposition_str.as_str()),
+            severity_override: severity_override_str.as_deref().map(Criticality::from),
+            confidence_score: row.get(13)?,
+            owner: row.get(14)?,
+            triage_notes: row.get(15)?,
+            acknowledged_at: acknowledged_str.and_then(|s| parse_ts(&s)),
+            investigating_at: investigating_str.and_then(|s| parse_ts(&s)),
+            escalated_at: escalated_str.and_then(|s| parse_ts(&s)),
+            closed_at: closed_str.and_then(|s| parse_ts(&s)),
+            closed_reason: row.get(20)?,
         })
     }
 
     fn row_to_alert_with_meta(row: &rusqlite::Row) -> rusqlite::Result<AlertWithMeta> {
         let alert = Self::row_to_alert(row)?;
-        let feed_name: String = row.get(10)?;
-        let keyword_pattern: String = row.get(11)?;
+        let feed_name: String = row.get(21)?;
+        let keyword_pattern: String = row.get(22)?;
         Ok(AlertWithMeta {
             alert,
             feed_name,
             keyword_pattern,
             tags: Vec::new(), // populated separately if needed
+        })
+    }
+
+    // ── Alert Triage ──────────────────────────────────────────────────────
+
+    pub fn update_alert_status(
+        &self,
+        alert_id: i64,
+        status: AlertStatus,
+        note: Option<&str>,
+    ) -> Result<()> {
+        let old_status: String = self
+            .conn
+            .query_row(
+                "SELECT status FROM alerts WHERE id = ?1",
+                [alert_id],
+                |row| row.get(0),
+            )?;
+        let timestamp_col = match status {
+            AlertStatus::Acknowledged => "acknowledged_at",
+            AlertStatus::Investigating => "investigating_at",
+            AlertStatus::Escalated => "escalated_at",
+            _ => "",
+        };
+        let ts_sql = if timestamp_col.is_empty() {
+            String::new()
+        } else {
+            format!(", {timestamp_col} = CASE WHEN {timestamp_col} IS NULL THEN CURRENT_TIMESTAMP ELSE {timestamp_col} END")
+        };
+        let sql = format!("UPDATE alerts SET status = ?1{ts_sql} WHERE id = ?2");
+        self.conn.execute(&sql, params![format!("{:?}", status), alert_id])?;
+        self.insert_triage_event(
+            alert_id,
+            "status_changed",
+            Some(&old_status),
+            Some(&format!("{:?}", status)),
+            note,
+        )?;
+        Ok(())
+    }
+
+    pub fn update_alert_disposition(
+        &self,
+        alert_id: i64,
+        disposition: AlertDisposition,
+        note: Option<&str>,
+    ) -> Result<()> {
+        let old_disp: String = self
+            .conn
+            .query_row(
+                "SELECT disposition FROM alerts WHERE id = ?1",
+                [alert_id],
+                |row| row.get(0),
+            )?;
+        self.conn.execute(
+            "UPDATE alerts SET disposition = ?1 WHERE id = ?2",
+            params![format!("{:?}", disposition), alert_id],
+        )?;
+        self.insert_triage_event(
+            alert_id,
+            "disposition_changed",
+            Some(&old_disp),
+            Some(&format!("{:?}", disposition)),
+            note,
+        )?;
+        Ok(())
+    }
+
+    pub fn update_alert_severity(
+        &self,
+        alert_id: i64,
+        severity: Option<Criticality>,
+        note: Option<&str>,
+    ) -> Result<()> {
+        let old_sev: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT severity_override FROM alerts WHERE id = ?1",
+                [alert_id],
+                |row| row.get(0),
+            )?;
+        self.conn.execute(
+            "UPDATE alerts SET severity_override = ?1 WHERE id = ?2",
+            params![severity.map(|c| format!("{:?}", c)), alert_id],
+        )?;
+        self.insert_triage_event(
+            alert_id,
+            "severity_changed",
+            old_sev.as_deref(),
+            severity.map(|c| format!("{:?}", c)).as_deref(),
+            note,
+        )?;
+        Ok(())
+    }
+
+    pub fn update_alert_confidence(
+        &self,
+        alert_id: i64,
+        confidence: Option<i64>,
+        note: Option<&str>,
+    ) -> Result<()> {
+        let old_conf: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT confidence_score FROM alerts WHERE id = ?1",
+                [alert_id],
+                |row| row.get(0),
+            )?;
+        self.conn.execute(
+            "UPDATE alerts SET confidence_score = ?1 WHERE id = ?2",
+            params![confidence, alert_id],
+        )?;
+        self.insert_triage_event(
+            alert_id,
+            "confidence_changed",
+            old_conf.map(|c| c.to_string()).as_deref(),
+            confidence.map(|c| c.to_string()).as_deref(),
+            note,
+        )?;
+        Ok(())
+    }
+
+    pub fn assign_alert_owner(
+        &self,
+        alert_id: i64,
+        owner: Option<&str>,
+        note: Option<&str>,
+    ) -> Result<()> {
+        let old_owner: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT owner FROM alerts WHERE id = ?1",
+                [alert_id],
+                |row| row.get(0),
+            )?;
+        self.conn.execute(
+            "UPDATE alerts SET owner = ?1 WHERE id = ?2",
+            params![owner, alert_id],
+        )?;
+        self.insert_triage_event(
+            alert_id,
+            "owner_changed",
+            old_owner.as_deref(),
+            owner,
+            note,
+        )?;
+        Ok(())
+    }
+
+    pub fn add_alert_note(&self, alert_id: i64, note: &str) -> Result<()> {
+        let existing: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT triage_notes FROM alerts WHERE id = ?1",
+                [alert_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let new_notes = match existing {
+            Some(existing) if !existing.is_empty() => format!("{}\n{}", existing, note),
+            _ => note.to_string(),
+        };
+        self.conn.execute(
+            "UPDATE alerts SET triage_notes = ?1 WHERE id = ?2",
+            params![new_notes, alert_id],
+        )?;
+        self.insert_triage_event(alert_id, "note_added", None, None, Some(note))?;
+        Ok(())
+    }
+
+    pub fn close_alert(
+        &self,
+        alert_id: i64,
+        disposition: AlertDisposition,
+        reason: Option<&str>,
+    ) -> Result<()> {
+        let old_status: String = self
+            .conn
+            .query_row(
+                "SELECT status FROM alerts WHERE id = ?1",
+                [alert_id],
+                |row| row.get(0),
+            )?;
+        self.conn.execute(
+            "UPDATE alerts SET status = 'Closed', disposition = ?1, closed_at = CURRENT_TIMESTAMP, closed_reason = ?2 WHERE id = ?3",
+            params![format!("{:?}", disposition), reason, alert_id],
+        )?;
+        self.insert_triage_event(
+            alert_id,
+            "closed",
+            Some(&old_status),
+            Some("Closed"),
+            reason,
+        )?;
+        self.insert_triage_event(
+            alert_id,
+            "disposition_changed",
+            None,
+            Some(&format!("{:?}", disposition)),
+            reason,
+        )?;
+        Ok(())
+    }
+
+    pub fn reopen_alert(&self, alert_id: i64, note: Option<&str>) -> Result<()> {
+        let old_status: String = self
+            .conn
+            .query_row(
+                "SELECT status FROM alerts WHERE id = ?1",
+                [alert_id],
+                |row| row.get(0),
+            )?;
+        self.conn.execute(
+            "UPDATE alerts SET status = 'Acknowledged', closed_at = NULL, closed_reason = NULL WHERE id = ?1",
+            [alert_id],
+        )?;
+        self.insert_triage_event(
+            alert_id,
+            "reopened",
+            Some(&old_status),
+            Some("Acknowledged"),
+            note,
+        )?;
+        Ok(())
+    }
+
+    pub fn bulk_update_alert_status(
+        &self,
+        alert_ids: &[i64],
+        status: AlertStatus,
+        note: Option<&str>,
+    ) -> Result<u64> {
+        if alert_ids.is_empty() {
+            return Ok(0);
+        }
+        let status_str = format!("{:?}", status);
+        let placeholders: Vec<String> = alert_ids.iter().map(|_| "?".to_string()).collect();
+        let sql = format!(
+            "UPDATE alerts SET status = ?1 WHERE id IN ({})",
+            placeholders.join(",")
+        );
+        let mut params: Vec<&dyn rusqlite::ToSql> =
+            vec![&status_str as &dyn rusqlite::ToSql];
+        for id in alert_ids {
+            params.push(id);
+        }
+        let count = self.conn.execute(&sql, rusqlite::params_from_iter(params))?;
+        for alert_id in alert_ids {
+            let _ = self.insert_triage_event(
+                *alert_id,
+                "status_changed",
+                None,
+                Some(&format!("{:?}", status)),
+                note,
+            );
+        }
+        Ok(count as u64)
+    }
+
+    pub fn list_alert_triage_events(&self, alert_id: i64) -> Result<Vec<AlertTriageEvent>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, alert_id, event_type, old_value, new_value, note, actor, created_at
+             FROM alert_triage_events
+             WHERE alert_id = ?1
+             ORDER BY created_at ASC, id ASC"
+        )?;
+        let rows = stmt.query_map([alert_id], Self::row_to_triage_event)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn get_alert_status_counts(&self) -> Result<HashMap<String, i64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT status, COUNT(*) FROM alerts GROUP BY status"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        rows.collect::<Result<HashMap<_, _>, _>>().map_err(Into::into)
+    }
+
+    pub fn get_alert_disposition_counts(&self) -> Result<HashMap<String, i64>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT disposition, COUNT(*) FROM alerts GROUP BY disposition"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        rows.collect::<Result<HashMap<_, _>, _>>().map_err(Into::into)
+    }
+
+    fn insert_triage_event(
+        &self,
+        alert_id: i64,
+        event_type: &str,
+        old_value: Option<&str>,
+        new_value: Option<&str>,
+        note: Option<&str>,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO alert_triage_events (alert_id, event_type, old_value, new_value, note, actor)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'local')",
+            params![alert_id, event_type, old_value, new_value, note],
+        )?;
+        Ok(())
+    }
+
+    fn row_to_triage_event(row: &rusqlite::Row) -> rusqlite::Result<AlertTriageEvent> {
+        let created_str: String = row.get(7)?;
+        Ok(AlertTriageEvent {
+            id: row.get(0)?,
+            alert_id: row.get(1)?,
+            event_type: row.get(2)?,
+            old_value: row.get(3)?,
+            new_value: row.get(4)?,
+            note: row.get(5)?,
+            actor: row.get(6)?,
+            created_at: parse_ts(&created_str).unwrap_or_else(Utc::now),
         })
     }
 
@@ -2721,6 +3142,11 @@ pub struct AlertFilter {
     pub feed_id: Option<i64>,
     pub keyword_id: Option<i64>,
     pub limit: Option<i64>,
+    pub status: Option<AlertStatus>,
+    pub disposition: Option<AlertDisposition>,
+    pub owner: Option<String>,
+    pub open_only: bool,
+    pub closed_only: bool,
 }
 
 #[derive(Debug, Clone, Default)]

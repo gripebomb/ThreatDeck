@@ -38,6 +38,8 @@ pub struct App {
     pub dashboard_stats: Stats,
     pub dashboard_recent_alerts: Vec<AlertWithMeta>,
     pub dashboard_criticality_data: Vec<(Criticality, i64)>,
+    pub dashboard_status_counts: std::collections::HashMap<String, i64>,
+    pub dashboard_disposition_counts: std::collections::HashMap<String, i64>,
 
     // Feeds
     pub feeds_list: Vec<FeedWithTags>,
@@ -55,9 +57,18 @@ pub struct App {
     pub alerts_filter: String,
     pub alerts_filter_criticality: Option<Criticality>,
     pub alerts_filter_unread_only: bool,
+    pub alerts_filter_status: Option<AlertStatus>,
+    pub alerts_filter_disposition: Option<AlertDisposition>,
+    pub alerts_hide_closed: bool,
     pub alerts_detail_view: bool,
     pub alerts_bulk_mode: bool,
     pub alerts_selected_bulk: HashSet<i64>,
+    pub triage_history_view: bool,
+    pub triage_enum_select_mode: bool,
+    pub triage_enum_target: Option<TriageEnumTarget>,
+    pub triage_enum_selected: usize,
+    pub triage_note_input_mode: bool,
+    pub triage_note_input: String,
 
     // Articles
     pub articles_list: Vec<FeedItemWithFeed>,
@@ -142,6 +153,8 @@ impl App {
             dashboard_stats: Stats::default(),
             dashboard_recent_alerts: Vec::new(),
             dashboard_criticality_data: Vec::new(),
+            dashboard_status_counts: std::collections::HashMap::new(),
+            dashboard_disposition_counts: std::collections::HashMap::new(),
             feeds_list: Vec::new(),
             feeds_selected: 0,
             feeds_filter: String::new(),
@@ -155,9 +168,18 @@ impl App {
             alerts_filter: String::new(),
             alerts_filter_criticality: None,
             alerts_filter_unread_only: false,
+            alerts_filter_status: None,
+            alerts_filter_disposition: None,
+            alerts_hide_closed: true,
             alerts_detail_view: false,
             alerts_bulk_mode: false,
             alerts_selected_bulk: HashSet::new(),
+            triage_history_view: false,
+            triage_enum_select_mode: false,
+            triage_enum_target: None,
+            triage_enum_selected: 0,
+            triage_note_input_mode: false,
+            triage_note_input: String::new(),
             articles_list: Vec::new(),
             articles_selected: 0,
             articles_filter: String::new(),
@@ -336,6 +358,7 @@ impl App {
             Screen::Keywords => self.keywords_show_form,
             Screen::Tags => self.tags_show_form,
             Screen::Settings => self.settings_notif_form,
+            Screen::Alerts => self.triage_note_input_mode,
             _ => false,
         }
     }
@@ -352,6 +375,16 @@ impl App {
             self.feeds_form_edit_id = None;
             self.input_mode = InputMode::Normal;
             self.form_focus = 0;
+        } else if self.triage_history_view {
+            self.triage_history_view = false;
+        } else if self.triage_enum_select_mode {
+            self.triage_enum_select_mode = false;
+            self.triage_enum_target = None;
+            self.triage_enum_selected = 0;
+        } else if self.triage_note_input_mode {
+            self.triage_note_input_mode = false;
+            self.triage_note_input.clear();
+            self.input_mode = InputMode::Normal;
         } else if self.alerts_detail_view {
             self.alerts_detail_view = false;
         } else if self.alerts_bulk_mode {
@@ -618,6 +651,12 @@ impl App {
         if let Ok(dist) = self.db.get_criticality_distribution() {
             self.dashboard_criticality_data = dist;
         }
+        if let Ok(counts) = self.db.get_alert_status_counts() {
+            self.dashboard_status_counts = counts;
+        }
+        if let Ok(counts) = self.db.get_alert_disposition_counts() {
+            self.dashboard_disposition_counts = counts;
+        }
     }
 
     pub fn refresh_feeds(&mut self) {
@@ -657,6 +696,9 @@ impl App {
             },
             criticality: self.alerts_filter_criticality,
             unread_only: self.alerts_filter_unread_only,
+            status: self.alerts_filter_status,
+            disposition: self.alerts_filter_disposition,
+            open_only: self.alerts_hide_closed,
             limit: Some(500),
             ..AlertFilter::default()
         };

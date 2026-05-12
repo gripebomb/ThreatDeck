@@ -26,14 +26,25 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             .alerts_filter_criticality
             .map(|c| format!("{:?}", c))
             .unwrap_or_else(|| "all".into());
+        let status = app
+            .alerts_filter_status
+            .map(|s| format!("{:?}", s))
+            .unwrap_or_else(|| "all".into());
+        let disp = app
+            .alerts_filter_disposition
+            .map(|d| format!("{:?}", d))
+            .unwrap_or_else(|| "all".into());
         format!(
-            "Alerts | Filter: {} | Criticality: {}{}",
+            "Alerts | Filter: {} | Crit: {} | Status: {} | Disp: {}{}{}",
             if app.alerts_filter.is_empty() {
                 "none"
             } else {
                 &app.alerts_filter
             },
             crit,
+            status,
+            disp,
+            if app.alerts_hide_closed { " | HideClosed" } else { "" },
             if app.alerts_bulk_mode { " | BULK" } else { "" }
         )
     };
@@ -51,7 +62,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     f.render_widget(title, chunks[0]);
 
     let header = Row::new(vec![
-        "Read", "Crit", "Feed", "Keyword", "Snippet", "Detected", "Tags",
+        "Read", "Sev", "Status", "Disp", "Feed", "Keyword", "Snippet", "Detected", "Owner",
     ])
     .style(
         Style::default()
@@ -68,16 +79,13 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         .map(|a| {
             let style = Style::default().fg(app.theme.fg);
             let read_mark = if a.alert.read { "○" } else { "●" };
-            let crit_color = crate::theme::criticality_color(app.theme, a.alert.criticality);
-            let crit_str = criticality_label(a.alert.criticality);
-            let snippet = truncate_chars(&a.alert.content_snippet, 40);
+            let sev_color = crate::theme::criticality_color(app.theme, a.alert.effective_severity());
+            let sev_str = criticality_label(a.alert.effective_severity());
+            let status_str = format!("{}", a.alert.status);
+            let disp_str = format!("{}", a.alert.disposition);
+            let snippet = truncate_chars(&a.alert.content_snippet, 36);
             let time_str = a.alert.detected_at.format("%Y-%m-%d %H:%M").to_string();
-            let tag_str = a
-                .tags
-                .iter()
-                .map(|t| t.name.clone())
-                .collect::<Vec<_>>()
-                .join(", ");
+            let owner_str = a.alert.owner.as_deref().unwrap_or("-");
 
             Row::new(vec![
                 Cell::from(read_mark).style(Style::default().fg(if a.alert.read {
@@ -85,13 +93,15 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 } else {
                     app.theme.primary
                 })),
-                Cell::from(crit_str)
-                    .style(Style::default().fg(crit_color).add_modifier(Modifier::BOLD)),
+                Cell::from(sev_str)
+                    .style(Style::default().fg(sev_color).add_modifier(Modifier::BOLD)),
+                Cell::from(status_str),
+                Cell::from(disp_str),
                 Cell::from(a.feed_name.as_str()),
                 Cell::from(a.keyword_pattern.as_str()),
                 Cell::from(snippet),
                 Cell::from(time_str),
-                Cell::from(tag_str),
+                Cell::from(owner_str),
             ])
             .style(style)
         })
@@ -101,12 +111,14 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         rows,
         vec![
             Constraint::Length(5),
+            Constraint::Length(6),
             Constraint::Length(10),
-            Constraint::Min(15),
+            Constraint::Length(8),
             Constraint::Min(12),
-            Constraint::Min(25),
+            Constraint::Min(12),
+            Constraint::Min(22),
             Constraint::Length(16),
-            Constraint::Min(12),
+            Constraint::Min(10),
         ],
     )
     .header(header)
@@ -122,8 +134,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         "-- FILTER -- Type search | [Enter] Keep | [Esc] Clear"
     } else if app.alerts_bulk_mode {
         "-- BULK -- [Space] Select  [a] All  [d] Delete selected  [Esc] Cancel"
+    } else if app.triage_enum_select_mode {
+        "-- SELECT -- [↑↓] Navigate  [Enter] Confirm  [Esc] Cancel"
+    } else if app.triage_note_input_mode {
+        "-- NOTE -- Type note | [Enter] Save | [Esc] Cancel"
     } else {
-        "-- NORMAL -- [1-9,0] Nav  [r] Read  [R] All read  [d] Delete  [D] Bulk  [c] Crit  [Enter] Detail  [/] Filter  [?] Help  [q] Quit"
+        "-- NORMAL -- [r] Read  [A]ck  [I]nv  [E]sc  [C]lose  [O]pen  [N]ote  [H]ist  [D]etail  [d]Del  [b]Bulk  [c]Crit  [s]Status  [t]Disp  [/]Filter  [?]Help  [q]Quit"
     };
     let status = Paragraph::new(status_text).style(Style::default().fg(app.theme.muted));
     f.render_widget(status, chunks[2]);
@@ -131,9 +147,35 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.alerts_detail_view {
         draw_detail(f, app);
     }
+
+    if app.triage_enum_select_mode {
+        draw_enum_selector(f, app);
+    }
+
+    if app.triage_note_input_mode {
+        draw_note_input(f, app);
+    }
+
+    if app.triage_history_view {
+        draw_history(f, app);
+    }
 }
 
 pub fn handle_key(app: &mut App, key: KeyEvent) {
+    if app.triage_enum_select_mode {
+        handle_enum_select_key(app, key);
+        return;
+    }
+    if app.triage_note_input_mode {
+        handle_note_input_key(app, key);
+        return;
+    }
+    if app.triage_history_view {
+        if key.code == KeyCode::Esc {
+            app.triage_history_view = false;
+        }
+        return;
+    }
     if app.alerts_bulk_mode {
         handle_bulk_key(app, key);
         return;
@@ -168,7 +210,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
                     Some(crate::types::ConfirmDialog::DeleteAlert { id: a.alert.id });
             }
         }
-        KeyCode::Char('D') => {
+        KeyCode::Char('b') => {
             app.alerts_bulk_mode = true;
             app.alerts_selected_bulk.clear();
         }
@@ -194,6 +236,82 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
                 Some(crate::types::Criticality::Critical) => None,
             };
             app.refresh_alerts();
+        }
+        KeyCode::Char('A') => {
+            if let Some(a) = app.alerts_list.get(app.alerts_selected) {
+                let _ = app.db.update_alert_status(a.alert.id, crate::types::AlertStatus::Acknowledged, None);
+                let _ = app.db.mark_alert_read(a.alert.id, true);
+                app.refresh_alerts();
+                app.set_notification("Alert acknowledged".into(), crate::types::NotificationType::Success);
+            }
+        }
+        KeyCode::Char('I') => {
+            if let Some(a) = app.alerts_list.get(app.alerts_selected) {
+                let _ = app.db.update_alert_status(a.alert.id, crate::types::AlertStatus::Investigating, None);
+                let _ = app.db.mark_alert_read(a.alert.id, true);
+                app.refresh_alerts();
+                app.set_notification("Investigation started".into(), crate::types::NotificationType::Success);
+            }
+        }
+        KeyCode::Char('E') => {
+            if let Some(a) = app.alerts_list.get(app.alerts_selected) {
+                let _ = app.db.update_alert_status(a.alert.id, crate::types::AlertStatus::Escalated, None);
+                let _ = app.db.mark_alert_read(a.alert.id, true);
+                app.refresh_alerts();
+                app.set_notification("Alert escalated".into(), crate::types::NotificationType::Warning);
+            }
+        }
+        KeyCode::Char('C') => {
+            if let Some(a) = app.alerts_list.get(app.alerts_selected) {
+                if !a.alert.can_close() {
+                    app.set_notification("Select disposition before closing (T)".into(), crate::types::NotificationType::Warning);
+                    return;
+                }
+                let _ = app.db.close_alert(a.alert.id, a.alert.disposition, None);
+                let _ = app.db.mark_alert_read(a.alert.id, true);
+                app.refresh_alerts();
+                app.set_notification("Alert closed".into(), crate::types::NotificationType::Success);
+            }
+        }
+        KeyCode::Char('O') => {
+            if let Some(a) = app.alerts_list.get(app.alerts_selected) {
+                let _ = app.db.reopen_alert(a.alert.id, None);
+                app.refresh_alerts();
+                app.set_notification("Alert reopened".into(), crate::types::NotificationType::Success);
+            }
+        }
+        KeyCode::Char('N') => {
+            app.triage_note_input_mode = true;
+            app.triage_note_input.clear();
+            app.input_mode = crate::app::InputMode::Typing;
+        }
+        KeyCode::Char('s') => {
+            app.triage_enum_select_mode = true;
+            app.triage_enum_target = Some(crate::types::TriageEnumTarget::Status);
+        }
+        KeyCode::Char('S') => {
+            app.triage_enum_select_mode = true;
+            app.triage_enum_target = Some(crate::types::TriageEnumTarget::Severity);
+        }
+        KeyCode::Char('T') => {
+            app.triage_enum_select_mode = true;
+            app.triage_enum_target = Some(crate::types::TriageEnumTarget::Disposition);
+        }
+        KeyCode::Char('M') => {
+            app.triage_note_input_mode = true;
+            app.triage_note_input.clear();
+            app.input_mode = crate::app::InputMode::Typing;
+        }
+        KeyCode::Char('H') => {
+            app.triage_history_view = true;
+        }
+        KeyCode::Char('h') => {
+            app.alerts_hide_closed = !app.alerts_hide_closed;
+            app.refresh_alerts();
+            app.set_notification(
+                if app.alerts_hide_closed { "Hiding closed alerts" } else { "Showing all alerts" }.into(),
+                crate::types::NotificationType::Info,
+            );
         }
         _ => {}
     }
@@ -238,9 +356,9 @@ fn draw_detail(f: &mut Frame, app: &App) {
     let area = f.area();
     let detail_area = ratatui::layout::Rect {
         x: area.width / 8,
-        y: area.height / 6,
+        y: area.height / 8,
         width: area.width * 3 / 4,
-        height: area.height * 2 / 3,
+        height: area.height * 3 / 4,
     };
     f.render_widget(Clear, detail_area);
     let Some(alert) = app.alerts_list.get(app.alerts_selected) else {
@@ -250,18 +368,25 @@ fn draw_detail(f: &mut Frame, app: &App) {
         .title("Alert Detail - Esc to close")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(app.theme.primary));
+    let inner = block.inner(detail_area);
+    f.render_widget(block, detail_area);
     let detail_chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(8), Constraint::Length(9)])
-        .split(detail_area);
-    let lines = [
+        .constraints([
+            Constraint::Length(9),
+            Constraint::Length(10),
+            Constraint::Min(6),
+        ])
+        .split(inner);
+    let meta_lines = [
         format!(
             "Title: {}",
             alert.alert.title.as_deref().unwrap_or("(untitled)")
         ),
         format!(
-            "Criticality: {}",
-            criticality_label(alert.alert.criticality)
+            "Criticality: {} (Effective: {})",
+            criticality_label(alert.alert.criticality),
+            criticality_label(alert.alert.effective_severity())
         ),
         format!("Feed: {}", alert.feed_name),
         format!("Keyword: {}", alert.keyword_pattern),
@@ -281,19 +406,64 @@ fn draw_detail(f: &mut Frame, app: &App) {
         ),
         String::new(),
         alert.alert.content_snippet.clone(),
-        String::new(),
-        format!(
-            "Metadata: {}",
-            alert.alert.metadata_json.as_deref().unwrap_or("{}")
-        ),
     ]
     .join("\n");
-    let para = Paragraph::new(lines)
-        .block(block)
+    let meta_para = Paragraph::new(meta_lines)
         .style(Style::default().fg(app.theme.fg).bg(app.theme.surface))
         .wrap(ratatui::widgets::Wrap { trim: false });
-    f.render_widget(para, detail_chunks[0]);
-    draw_indicator_panel(f, app, detail_chunks[1], alert.alert.id);
+    f.render_widget(meta_para, detail_chunks[0]);
+    draw_triage_panel(f, app, detail_chunks[1], alert);
+    draw_indicator_panel(f, app, detail_chunks[2], alert.alert.id);
+}
+
+fn draw_triage_panel(f: &mut Frame, app: &App, area: ratatui::layout::Rect, alert: &crate::types::AlertWithMeta) {
+    let block = Block::default()
+        .title("Triage")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(app.theme.border));
+    let mut lines = vec![];
+    lines.push(format!("Status:        {}", alert.alert.status));
+    lines.push(format!("Disposition:   {}", alert.alert.disposition));
+    lines.push(format!(
+        "Severity:      {}",
+        criticality_label(alert.alert.effective_severity())
+    ));
+    lines.push(format!(
+        "Confidence:    {}",
+        alert
+            .alert
+            .confidence_score
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "-".into())
+    ));
+    lines.push(format!(
+        "Owner:         {}",
+        alert.alert.owner.as_deref().unwrap_or("-"
+    )));
+    if let Some(ts) = alert.alert.acknowledged_at {
+        lines.push(format!("Acknowledged:  {}", ts.format("%Y-%m-%d %H:%M")));
+    }
+    if let Some(ts) = alert.alert.investigating_at {
+        lines.push(format!("Investigating: {}", ts.format("%Y-%m-%d %H:%M")));
+    }
+    if let Some(ts) = alert.alert.escalated_at {
+        lines.push(format!("Escalated:     {}", ts.format("%Y-%m-%d %H:%M")));
+    }
+    if let Some(ts) = alert.alert.closed_at {
+        lines.push(format!(
+            "Closed:        {} — {}",
+            ts.format("%Y-%m-%d %H:%M"),
+            alert.alert.closed_reason.as_deref().unwrap_or("(no reason)")
+        ));
+    }
+    if let Some(notes) = &alert.alert.triage_notes {
+        lines.push(String::new());
+        lines.push(format!("Notes: {}", notes));
+    }
+    let para = Paragraph::new(lines.join("\n"))
+        .block(block)
+        .style(Style::default().fg(app.theme.fg).bg(app.theme.surface));
+    f.render_widget(para, area);
 }
 
 fn draw_indicator_panel(f: &mut Frame, app: &App, area: ratatui::layout::Rect, alert_id: i64) {
@@ -375,6 +545,217 @@ fn truncate_chars(value: &str, max_chars: usize) -> String {
     } else {
         value.to_string()
     }
+}
+
+fn draw_enum_selector(f: &mut Frame, app: &App) {
+    let area = f.area();
+    let popup = ratatui::layout::Rect {
+        x: area.width / 3,
+        y: area.height / 3,
+        width: area.width / 3,
+        height: 12,
+    };
+    f.render_widget(Clear, popup);
+
+    let target = app.triage_enum_target.unwrap_or(crate::types::TriageEnumTarget::Status);
+    let title = match target {
+        crate::types::TriageEnumTarget::Status => "Select Status",
+        crate::types::TriageEnumTarget::Disposition => "Select Disposition",
+        crate::types::TriageEnumTarget::Severity => "Select Severity",
+    };
+
+    let items: Vec<&str> = match target {
+        crate::types::TriageEnumTarget::Status => {
+            vec!["New", "Acknowledged", "Investigating", "Escalated", "Closed"]
+        }
+        crate::types::TriageEnumTarget::Disposition => {
+            vec!["Unknown", "ConfirmedThreat", "FalsePositive", "Benign", "Duplicate", "Informational", "NeedsMoreContext"]
+        }
+        crate::types::TriageEnumTarget::Severity => {
+            vec!["Low", "Medium", "High", "Critical"]
+        }
+    };
+
+    let list_items: Vec<ratatui::widgets::ListItem> = items
+        .iter()
+        .map(|&item| ratatui::widgets::ListItem::new(item))
+        .collect();
+    let list = ratatui::widgets::List::new(list_items)
+        .block(
+            Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(app.theme.primary)),
+        )
+        .style(Style::default().fg(app.theme.fg).bg(app.theme.surface));
+    f.render_widget(list, popup);
+}
+
+fn handle_enum_select_key(app: &mut App, key: KeyEvent) {
+    let target = app.triage_enum_target.unwrap_or(crate::types::TriageEnumTarget::Status);
+
+    match key.code {
+        KeyCode::Esc => {
+            app.triage_enum_select_mode = false;
+            app.triage_enum_target = None;
+            app.triage_enum_selected = 0;
+        }
+        KeyCode::Char(c) if c.is_ascii_digit() => {
+            let digit = c as usize - '0' as usize;
+            if digit == 0 {
+                app.triage_enum_select_mode = false;
+                app.triage_enum_target = None;
+                app.triage_enum_selected = 0;
+                return;
+            }
+            let idx = digit.saturating_sub(1);
+            if let Some(a) = app.alerts_list.get(app.alerts_selected) {
+                let alert_id = a.alert.id;
+                match target {
+                    crate::types::TriageEnumTarget::Status => {
+                        let statuses = [
+                            crate::types::AlertStatus::New,
+                            crate::types::AlertStatus::Acknowledged,
+                            crate::types::AlertStatus::Investigating,
+                            crate::types::AlertStatus::Escalated,
+                            crate::types::AlertStatus::Closed,
+                        ];
+                        if let Some(&status) = statuses.get(idx) {
+                            let note = Some(&*format!("Set to {:?}", status));
+                            let _ = app.db.update_alert_status(alert_id, status, note);
+                            let _ = app.db.mark_alert_read(alert_id, true);
+                            app.refresh_alerts();
+                            app.set_notification(format!("Status: {:?}", status), crate::types::NotificationType::Success);
+                        }
+                    }
+                    crate::types::TriageEnumTarget::Disposition => {
+                        let dispositions = [
+                            crate::types::AlertDisposition::Unknown,
+                            crate::types::AlertDisposition::ConfirmedThreat,
+                            crate::types::AlertDisposition::FalsePositive,
+                            crate::types::AlertDisposition::Benign,
+                            crate::types::AlertDisposition::Duplicate,
+                            crate::types::AlertDisposition::Informational,
+                            crate::types::AlertDisposition::NeedsMoreContext,
+                        ];
+                        if let Some(&disp) = dispositions.get(idx) {
+                            let _ = app.db.update_alert_disposition(alert_id, disp, None);
+                            app.refresh_alerts();
+                            app.set_notification(format!("Disposition: {:?}", disp), crate::types::NotificationType::Success);
+                        }
+                    }
+                    crate::types::TriageEnumTarget::Severity => {
+                        let severities = [
+                            crate::types::Criticality::Low,
+                            crate::types::Criticality::Medium,
+                            crate::types::Criticality::High,
+                            crate::types::Criticality::Critical,
+                        ];
+                        if let Some(&sev) = severities.get(idx) {
+                            let _ = app.db.update_alert_severity(alert_id, Some(sev), None);
+                            app.refresh_alerts();
+                            app.set_notification(format!("Severity: {:?}", sev), crate::types::NotificationType::Success);
+                        }
+                    }
+                }
+            }
+            app.triage_enum_select_mode = false;
+            app.triage_enum_target = None;
+            app.triage_enum_selected = 0;
+        }
+        _ => {}
+    }
+}
+
+fn draw_note_input(f: &mut Frame, app: &App) {
+    let area = f.area();
+    let popup = ratatui::layout::Rect {
+        x: area.width / 4,
+        y: area.height / 3,
+        width: area.width / 2,
+        height: 5,
+    };
+    f.render_widget(Clear, popup);
+    let block = Block::default()
+        .title("Add Note — Enter to save, Esc to cancel")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(app.theme.primary));
+    let para = Paragraph::new(app.triage_note_input.as_str())
+        .block(block)
+        .style(Style::default().fg(app.theme.fg).bg(app.theme.surface));
+    f.render_widget(para, popup);
+}
+
+fn handle_note_input_key(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Esc => {
+            app.triage_note_input_mode = false;
+            app.triage_note_input.clear();
+            app.input_mode = crate::app::InputMode::Normal;
+        }
+        KeyCode::Enter => {
+            if let Some(a) = app.alerts_list.get(app.alerts_selected) {
+                if !app.triage_note_input.is_empty() {
+                    let _ = app.db.add_alert_note(a.alert.id, &app.triage_note_input);
+                }
+                // If target was owner assignment via 'M', set owner instead
+                // For now, 'M' also uses note input but we can differentiate if needed
+            }
+            app.triage_note_input_mode = false;
+            app.triage_note_input.clear();
+            app.input_mode = crate::app::InputMode::Normal;
+            app.refresh_alerts();
+            app.set_notification("Note added".into(), crate::types::NotificationType::Success);
+        }
+        KeyCode::Backspace => {
+            app.triage_note_input.pop();
+        }
+        KeyCode::Char(c) => {
+            app.triage_note_input.push(c);
+        }
+        _ => {}
+    }
+}
+
+fn draw_history(f: &mut Frame, app: &App) {
+    let area = f.area();
+    let popup = ratatui::layout::Rect {
+        x: area.width / 8,
+        y: area.height / 6,
+        width: area.width * 3 / 4,
+        height: area.height * 2 / 3,
+    };
+    f.render_widget(Clear, popup);
+    let block = Block::default()
+        .title("Triage History — Esc to close")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(app.theme.primary));
+    let inner = block.inner(popup);
+    f.render_widget(block, popup);
+
+    let Some(alert) = app.alerts_list.get(app.alerts_selected) else {
+        return;
+    };
+    let events = app.db.list_alert_triage_events(alert.alert.id).unwrap_or_default();
+    let mut lines = vec![];
+    if events.is_empty() {
+        lines.push("No triage events recorded.".to_string());
+    } else {
+        for event in events {
+            let ts = event.created_at.format("%Y-%m-%d %H:%M");
+            let change = match (event.old_value.as_ref(), event.new_value.as_ref()) {
+                (Some(old), Some(new)) => format!("{} → {}", old, new),
+                (None, Some(new)) => format!("→ {}", new),
+                (Some(old), None) => format!("{} → (none)", old),
+                (None, None) => String::new(),
+            };
+            let note = event.note.map(|n| format!(" — {}", n)).unwrap_or_default();
+            lines.push(format!("{} {:20} {}{}", ts, event.event_type, change, note));
+        }
+    }
+    let para = Paragraph::new(lines.join("\n"))
+        .style(Style::default().fg(app.theme.fg).bg(app.theme.surface));
+    f.render_widget(para, inner);
 }
 
 #[cfg(test)]

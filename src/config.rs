@@ -14,6 +14,7 @@ pub struct AppConfig {
     pub max_health_log_entries: usize,
     pub ioc: IocConfig,
     pub enrichment: EnrichmentConfig,
+    pub triage: TriageConfig,
 }
 
 impl Default for AppConfig {
@@ -26,6 +27,23 @@ impl Default for AppConfig {
             max_health_log_entries: 100,
             ioc: IocConfig::default(),
             enrichment: EnrichmentConfig::default(),
+            triage: TriageConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TriageConfig {
+    pub hide_closed_by_default: bool,
+    pub require_disposition_on_close: bool,
+}
+
+impl Default for TriageConfig {
+    fn default() -> Self {
+        Self {
+            hide_closed_by_default: true,
+            require_disposition_on_close: true,
         }
     }
 }

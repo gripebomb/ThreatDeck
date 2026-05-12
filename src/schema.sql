@@ -50,6 +50,17 @@ CREATE TABLE IF NOT EXISTS alerts (
     content_hash TEXT NOT NULL,
     detected_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     metadata_json TEXT,
+    status TEXT NOT NULL DEFAULT 'New',
+    disposition TEXT NOT NULL DEFAULT 'Unknown',
+    severity_override TEXT,
+    confidence_score INTEGER,
+    owner TEXT,
+    triage_notes TEXT,
+    acknowledged_at TEXT,
+    investigating_at TEXT,
+    escalated_at TEXT,
+    closed_at TEXT,
+    closed_reason TEXT,
     FOREIGN KEY (feed_id) REFERENCES feeds(id),
     FOREIGN KEY (keyword_id) REFERENCES keywords(id)
 );
@@ -58,6 +69,10 @@ CREATE INDEX IF NOT EXISTS idx_alerts_keyword ON alerts(keyword_id);
 CREATE INDEX IF NOT EXISTS idx_alerts_detected ON alerts(detected_at);
 CREATE INDEX IF NOT EXISTS idx_alerts_read ON alerts(read);
 CREATE INDEX IF NOT EXISTS idx_alerts_hash ON alerts(content_hash);
+CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status);
+CREATE INDEX IF NOT EXISTS idx_alerts_disposition ON alerts(disposition);
+CREATE INDEX IF NOT EXISTS idx_alerts_owner ON alerts(owner);
+CREATE INDEX IF NOT EXISTS idx_alerts_closed_at ON alerts(closed_at);
 
 CREATE TABLE IF NOT EXISTS indicators (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -235,6 +250,19 @@ CREATE TABLE IF NOT EXISTS feed_health_logs (
     FOREIGN KEY (feed_id) REFERENCES feeds(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_health_logs_feed ON feed_health_logs(feed_id, checked_at);
+
+CREATE TABLE IF NOT EXISTS alert_triage_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    alert_id INTEGER NOT NULL,
+    event_type TEXT NOT NULL,
+    old_value TEXT,
+    new_value TEXT,
+    note TEXT,
+    actor TEXT NOT NULL DEFAULT 'local',
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(alert_id) REFERENCES alerts(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_triage_events_alert ON alert_triage_events(alert_id, created_at);
 
 CREATE TABLE IF NOT EXISTS app_meta (
     key TEXT PRIMARY KEY,

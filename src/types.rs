@@ -143,6 +143,82 @@ impl From<&str> for NotificationChannel {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum AlertStatus {
+    #[default]
+    New,
+    Acknowledged,
+    Investigating,
+    Escalated,
+    Closed,
+}
+
+impl std::fmt::Display for AlertStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AlertStatus::New => write!(f, "New"),
+            AlertStatus::Acknowledged => write!(f, "Ack"),
+            AlertStatus::Investigating => write!(f, "Inv"),
+            AlertStatus::Escalated => write!(f, "Esc"),
+            AlertStatus::Closed => write!(f, "Closed"),
+        }
+    }
+}
+
+impl From<&str> for AlertStatus {
+    fn from(s: &str) -> Self {
+        match s {
+            "New" => AlertStatus::New,
+            "Acknowledged" => AlertStatus::Acknowledged,
+            "Investigating" => AlertStatus::Investigating,
+            "Escalated" => AlertStatus::Escalated,
+            "Closed" => AlertStatus::Closed,
+            _ => AlertStatus::New,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum AlertDisposition {
+    #[default]
+    Unknown,
+    ConfirmedThreat,
+    FalsePositive,
+    Benign,
+    Duplicate,
+    Informational,
+    NeedsMoreContext,
+}
+
+impl std::fmt::Display for AlertDisposition {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AlertDisposition::Unknown => write!(f, "Unknown"),
+            AlertDisposition::ConfirmedThreat => write!(f, "Threat"),
+            AlertDisposition::FalsePositive => write!(f, "FalsePos"),
+            AlertDisposition::Benign => write!(f, "Benign"),
+            AlertDisposition::Duplicate => write!(f, "Dup"),
+            AlertDisposition::Informational => write!(f, "Info"),
+            AlertDisposition::NeedsMoreContext => write!(f, "NeedCtx"),
+        }
+    }
+}
+
+impl From<&str> for AlertDisposition {
+    fn from(s: &str) -> Self {
+        match s {
+            "Unknown" => AlertDisposition::Unknown,
+            "ConfirmedThreat" => AlertDisposition::ConfirmedThreat,
+            "FalsePositive" => AlertDisposition::FalsePositive,
+            "Benign" => AlertDisposition::Benign,
+            "Duplicate" => AlertDisposition::Duplicate,
+            "Informational" => AlertDisposition::Informational,
+            "NeedsMoreContext" => AlertDisposition::NeedsMoreContext,
+            _ => AlertDisposition::Unknown,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Screen {
     Dashboard,
@@ -255,6 +331,31 @@ pub struct Alert {
     pub content_hash: String,
     pub detected_at: DateTime<Utc>,
     pub metadata_json: Option<String>,
+    pub status: AlertStatus,
+    pub disposition: AlertDisposition,
+    pub severity_override: Option<Criticality>,
+    pub confidence_score: Option<i64>,
+    pub owner: Option<String>,
+    pub triage_notes: Option<String>,
+    pub acknowledged_at: Option<DateTime<Utc>>,
+    pub investigating_at: Option<DateTime<Utc>>,
+    pub escalated_at: Option<DateTime<Utc>>,
+    pub closed_at: Option<DateTime<Utc>>,
+    pub closed_reason: Option<String>,
+}
+
+impl Alert {
+    pub fn effective_severity(&self) -> Criticality {
+        self.severity_override.unwrap_or(self.criticality)
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.status != AlertStatus::Closed
+    }
+
+    pub fn can_close(&self) -> bool {
+        self.disposition != AlertDisposition::Unknown
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -355,6 +456,34 @@ pub struct NewFeedItem {
     pub published_at: Option<DateTime<Utc>>,
     pub content_hash: String,
     pub metadata_json: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct AlertFilter {
+    pub text: Option<String>,
+    pub criticality: Option<Criticality>,
+    pub unread_only: bool,
+    pub tag_id: Option<i64>,
+    pub feed_id: Option<i64>,
+    pub keyword_id: Option<i64>,
+    pub limit: Option<usize>,
+    pub status: Option<AlertStatus>,
+    pub disposition: Option<AlertDisposition>,
+    pub owner: Option<String>,
+    pub open_only: bool,
+    pub closed_only: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct AlertTriageEvent {
+    pub id: i64,
+    pub alert_id: i64,
+    pub event_type: String,
+    pub old_value: Option<String>,
+    pub new_value: Option<String>,
+    pub note: Option<String>,
+    pub actor: String,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -495,4 +624,11 @@ pub enum TagAssignmentTarget {
     Feed(i64),
     Keyword(i64),
     Alert(i64),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TriageEnumTarget {
+    Status,
+    Disposition,
+    Severity,
 }
