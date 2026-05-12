@@ -155,3 +155,48 @@ impl Drop for AutoFetcher {
         let _ = self.stop_tx.send(());
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn push_error_caps_at_max() {
+        let mut errors = Vec::new();
+        for i in 0..MAX_ERRORS_PER_CYCLE + 5 {
+            push_error(&mut errors,
+                format!("error {}", i)
+            );
+        }
+        assert_eq!(errors.len(), MAX_ERRORS_PER_CYCLE + 1);
+        assert!(errors.last().unwrap().contains("truncating"));
+    }
+
+    #[test]
+    fn auto_fetcher_stop_sends_stopped_message() {
+        let db_path = std::env::temp_dir().join(format!(
+            "threatdeck-autofetch-stop-{}.db",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&db_path);
+
+        let (tx, rx) = mpsc::channel();
+        // Use a long interval so the thread doesn't do work before we stop it
+        let fetcher = AutoFetcher::spawn(db_path.clone(), 9999, tx);
+        fetcher.stop();
+
+        // We may get a Completed message first (DB open failed or empty feeds),
+        // followed by Stopped. Collect all messages.
+        let mut got_stopped = false;
+        while let Ok(msg) = rx.recv_timeout(Duration::from_secs(2)) {
+            if matches!(msg, AutoFetchMessage::Stopped) {
+                got_stopped = true;
+                break;
+            }
+        }
+        assert!(got_stopped, "Expected Stopped message after stop()");
+
+        let _ = std::fs::remove_file(&db_path);
+    }
+}

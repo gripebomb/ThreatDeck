@@ -65,7 +65,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     } else if matches!(app.settings_tab, SettingsTab::Enrichment) {
         "-- NORMAL -- [1-9,0] Nav  [Tab] Tabs  [Space/e] Toggle  [t] Test provider  [r] Refresh  [?] Help  [q] Quit".to_string()
     } else {
-        "-- NORMAL -- [1-9,0] Nav  [Tab] Tabs  [Left/Right] Theme  [-/+] Retention/Interval  [f] Auto-fetch  [i/j/e/o] Toggles  [p] Preview  [s] Save  [?] Help  [q] Quit".to_string()
+        "-- NORMAL -- [1-9,0] Nav  [Tab] Tabs  [Left/Right] Theme  [-/+] Interval  [f] Auto-fetch  [i/j/e/o] Toggles  [p] Preview  [s] Save  [?] Help  [q] Quit".to_string()
     };
     let status = Paragraph::new(status_text).style(Style::default().fg(app.theme.muted));
     f.render_widget(status, chunks[3]);
@@ -179,7 +179,7 @@ fn draw_general(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     );
     f.render_widget(auto_fetch_para, chunks[5]);
 
-    let help = Paragraph::new("Keys: [Left/Right/Space] Theme  [-/+] Retention/Interval  [f] Auto-fetch  [i/j/e/o] Toggles  [p] Preview  [s] Save")
+    let help = Paragraph::new("Keys: [Left/Right/Space] Theme  [-/+] Interval  [f] Auto-fetch  [i/j/e/o] Toggles  [p] Preview  [s] Save")
         .style(Style::default().fg(app.theme.muted))
         .alignment(ratatui::layout::Alignment::Center);
     f.render_widget(help, chunks[6]);
