@@ -65,7 +65,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     } else if matches!(app.settings_tab, SettingsTab::Enrichment) {
         "-- NORMAL -- [1-9,0] Nav  [Tab] Tabs  [Space/e] Toggle  [t] Test provider  [r] Refresh  [?] Help  [q] Quit".to_string()
     } else {
-        "-- NORMAL -- [1-9,0] Nav  [Tab] Tabs  [Left/Right] Theme  [-/+] Retention  [p] Preview  [x] Cleanup  [s] Save  [?] Help  [q] Quit".to_string()
+        "-- NORMAL -- [1-9,0] Nav  [Tab] Tabs  [Left/Right] Theme  [-/+] Retention/Interval  [f] Auto-fetch  [i/j/e/o] Toggles  [p] Preview  [s] Save  [?] Help  [q] Quit".to_string()
     };
     let status = Paragraph::new(status_text).style(Style::default().fg(app.theme.muted));
     f.render_widget(status, chunks[3]);
@@ -80,12 +80,13 @@ fn draw_general(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
-            Constraint::Length(3),
-            Constraint::Length(3),
-            Constraint::Length(3),
-            Constraint::Length(3),
-            Constraint::Length(5),
+            Constraint::Length(3), // theme
+            Constraint::Length(3), // retention
+            Constraint::Length(3), // preview
+            Constraint::Length(3), // ioc
+            Constraint::Length(3), // enrichment
+            Constraint::Length(3), // auto fetch
+            Constraint::Length(5), // help
         ])
         .split(area);
 
@@ -162,10 +163,26 @@ fn draw_general(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     );
     f.render_widget(enrichment_para, chunks[4]);
 
-    let help = Paragraph::new("Keys: [Left/Right/Space] Theme  [-/+] Retention  [i] IOC  [j] Raw JSON  [e] Enrichment  [o] Alert-only  [s] Save")
+    let auto_fetch_text = format!(
+        "Auto fetch: {} | Fetch interval: {} min",
+        if app.settings_auto_fetch_enabled {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        app.settings_auto_fetch_interval
+    );
+    let auto_fetch_para = Paragraph::new(auto_fetch_text).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(app.theme.border)),
+    );
+    f.render_widget(auto_fetch_para, chunks[5]);
+
+    let help = Paragraph::new("Keys: [Left/Right/Space] Theme  [-/+] Retention/Interval  [f] Auto-fetch  [i/j/e/o] Toggles  [p] Preview  [s] Save")
         .style(Style::default().fg(app.theme.muted))
         .alignment(ratatui::layout::Alignment::Center);
-    f.render_widget(help, chunks[5]);
+    f.render_widget(help, chunks[6]);
 }
 
 fn draw_notifications(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
@@ -504,16 +521,6 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         KeyCode::Left if matches!(app.settings_tab, SettingsTab::General) => {
             cycle_theme(app, false);
         }
-        KeyCode::Char('+') | KeyCode::Char('=')
-            if matches!(app.settings_tab, SettingsTab::General) =>
-        {
-            app.settings_retention_days = app.settings_retention_days.saturating_add(1);
-            app.settings_cleanup_preview = None;
-        }
-        KeyCode::Char('-') if matches!(app.settings_tab, SettingsTab::General) => {
-            app.settings_retention_days = app.settings_retention_days.saturating_sub(1).max(1);
-            app.settings_cleanup_preview = None;
-        }
         KeyCode::Char('i') if matches!(app.settings_tab, SettingsTab::General) => {
             app.config.ioc.enabled = !app.config.ioc.enabled;
         }
@@ -526,6 +533,46 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('o') if matches!(app.settings_tab, SettingsTab::General) => {
             app.config.enrichment.enrich_only_alert_indicators =
                 !app.config.enrichment.enrich_only_alert_indicators;
+        }
+        KeyCode::Char('f') if matches!(app.settings_tab, SettingsTab::General) => {
+            app.settings_auto_fetch_enabled = !app.settings_auto_fetch_enabled;
+            if app.settings_auto_fetch_enabled {
+                app.start_auto_fetch();
+                app.set_notification(
+                    "Auto-fetch enabled".to_string(),
+                    crate::types::NotificationType::Success,
+                );
+            } else {
+                app.stop_auto_fetch();
+                app.set_notification(
+                    "Auto-fetch disabled".to_string(),
+                    crate::types::NotificationType::Info,
+                );
+            }
+        }
+        KeyCode::Char('+') | KeyCode::Char('=') if matches!(app.settings_tab, SettingsTab::General) => {
+            if app.settings_auto_fetch_interval < 60 {
+                app.settings_auto_fetch_interval += 5;
+                if app.settings_auto_fetch_enabled {
+                    app.restart_auto_fetch();
+                }
+                app.set_notification(
+                    format!("Auto-fetch interval: {} min", app.settings_auto_fetch_interval),
+                    crate::types::NotificationType::Info,
+                );
+            }
+        }
+        KeyCode::Char('-') if matches!(app.settings_tab, SettingsTab::General) => {
+            if app.settings_auto_fetch_interval > 5 {
+                app.settings_auto_fetch_interval -= 5;
+                if app.settings_auto_fetch_enabled {
+                    app.restart_auto_fetch();
+                }
+                app.set_notification(
+                    format!("Auto-fetch interval: {} min", app.settings_auto_fetch_interval),
+                    crate::types::NotificationType::Info,
+                );
+            }
         }
         KeyCode::Char('p') => {
             if let Some(cutoff) = chrono::Utc::now()
@@ -547,6 +594,8 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('s') => {
             app.config.theme = app.settings_theme_name.clone();
             app.config.alert_retention_days = app.settings_retention_days;
+            app.config.auto_fetch.enabled = app.settings_auto_fetch_enabled;
+            app.config.auto_fetch.interval_minutes = app.settings_auto_fetch_interval;
             app.theme = crate::theme::get_runtime_theme(&app.config.theme);
             let _ = crate::config::save_app_config(&app.paths.config_file, &app.config);
             app.set_notification("Settings saved".to_string(), NotificationType::Success);
