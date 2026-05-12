@@ -137,9 +137,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     } else if app.triage_enum_select_mode {
         "-- SELECT -- [1-9] Pick option  [0/Esc] Cancel"
     } else if app.triage_note_input_mode {
-        "-- NOTE -- Type note | [Enter] Save | [Esc] Cancel"
+        match app.triage_input_target {
+            crate::types::TriageInputTarget::Note => "-- NOTE -- Type note | [Enter] Save | [Esc] Cancel",
+            crate::types::TriageInputTarget::Owner => "-- OWNER -- Type analyst name | [Enter] Save | [Esc] Cancel",
+        }
     } else {
-        "-- NORMAL -- [r] Read  [A] Acknowledge  [I] Investigate  [E] Escalate  [C] Close  [O] Reopen  [N] Note  [Enter] Detail  [d] Delete  [/] Filter  [?] Help  [q] Quit"
+        "-- NORMAL -- [r] Read  [A] Acknowledge  [I] Investigate  [E] Escalate  [C] Close  [O] Reopen  [N] Note  [M] Owner  [Enter] Detail  [d] Delete  [/] Filter  [?] Help  [q] Quit"
     };
     let status = Paragraph::new(status_text).style(Style::default().fg(app.theme.muted));
     f.render_widget(status, chunks[2]);
@@ -283,6 +286,13 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('N') => {
             app.triage_note_input_mode = true;
             app.triage_note_input.clear();
+            app.triage_input_target = crate::types::TriageInputTarget::Note;
+            app.input_mode = crate::app::InputMode::Typing;
+        }
+        KeyCode::Char('M') => {
+            app.triage_note_input_mode = true;
+            app.triage_note_input.clear();
+            app.triage_input_target = crate::types::TriageInputTarget::Owner;
             app.input_mode = crate::app::InputMode::Typing;
         }
         KeyCode::Char('s') => {
@@ -296,11 +306,6 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         KeyCode::Char('T') => {
             app.triage_enum_select_mode = true;
             app.triage_enum_target = Some(crate::types::TriageEnumTarget::Disposition);
-        }
-        KeyCode::Char('M') => {
-            app.triage_note_input_mode = true;
-            app.triage_note_input.clear();
-            app.input_mode = crate::app::InputMode::Typing;
         }
         KeyCode::Char('H') => {
             app.triage_history_view = true;
@@ -440,6 +445,12 @@ fn draw_triage_panel(f: &mut Frame, app: &App, area: ratatui::layout::Rect, aler
         "Owner:         {}",
         alert.alert.owner.as_deref().unwrap_or("-"
     )));
+    lines.push(String::new());
+    lines.push(format!(
+        "Notes: {}",
+        alert.alert.triage_notes.as_deref().unwrap_or("(none)")
+    ));
+    lines.push(String::new());
     if let Some(ts) = alert.alert.acknowledged_at {
         lines.push(format!("Acknowledged:  {}", ts.format("%Y-%m-%d %H:%M")));
     }
@@ -455,10 +466,6 @@ fn draw_triage_panel(f: &mut Frame, app: &App, area: ratatui::layout::Rect, aler
             ts.format("%Y-%m-%d %H:%M"),
             alert.alert.closed_reason.as_deref().unwrap_or("(no reason)")
         ));
-    }
-    if let Some(notes) = &alert.alert.triage_notes {
-        lines.push(String::new());
-        lines.push(format!("Notes: {}", notes));
     }
     let para = Paragraph::new(lines.join("\n"))
         .block(block)
@@ -680,8 +687,12 @@ fn draw_note_input(f: &mut Frame, app: &App) {
         height: 5,
     };
     f.render_widget(Clear, popup);
+    let title = match app.triage_input_target {
+        crate::types::TriageInputTarget::Note => "Add Note — Enter to save, Esc to cancel",
+        crate::types::TriageInputTarget::Owner => "Assign Owner — Enter to save, Esc to cancel",
+    };
     let block = Block::default()
-        .title("Add Note — Enter to save, Esc to cancel")
+        .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(app.theme.primary));
     let para = Paragraph::new(app.triage_note_input.as_str())
@@ -695,21 +706,40 @@ fn handle_note_input_key(app: &mut App, key: KeyEvent) {
         KeyCode::Esc => {
             app.triage_note_input_mode = false;
             app.triage_note_input.clear();
+            app.triage_input_target = crate::types::TriageInputTarget::default();
             app.input_mode = crate::app::InputMode::Normal;
         }
         KeyCode::Enter => {
             if let Some(a) = app.alerts_list.get(app.alerts_selected) {
                 if !app.triage_note_input.is_empty() {
-                    let _ = app.db.add_alert_note(a.alert.id, &app.triage_note_input);
+                    match app.triage_input_target {
+                        crate::types::TriageInputTarget::Note => {
+                            let _ = app.db.add_alert_note(a.alert.id, &app.triage_note_input);
+                            app.set_notification(
+                                "Note saved — shown in Triage panel below".into(),
+                                crate::types::NotificationType::Success,
+                            );
+                        }
+                        crate::types::TriageInputTarget::Owner => {
+                            let _ = app.db.assign_alert_owner(
+                                a.alert.id,
+                                Some(&app.triage_note_input),
+                                None,
+                            );
+                            app.set_notification(
+                                format!("Owner set to {}", app.triage_note_input),
+                                crate::types::NotificationType::Success,
+                            );
+                        }
+                    }
                 }
-                // If target was owner assignment via 'M', set owner instead
-                // For now, 'M' also uses note input but we can differentiate if needed
             }
             app.triage_note_input_mode = false;
             app.triage_note_input.clear();
+            app.triage_input_target = crate::types::TriageInputTarget::default();
             app.input_mode = crate::app::InputMode::Normal;
             app.refresh_alerts();
-            app.set_notification("Note added".into(), crate::types::NotificationType::Success);
+            app.alerts_detail_view = true;
         }
         KeyCode::Backspace => {
             app.triage_note_input.pop();

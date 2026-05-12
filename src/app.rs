@@ -69,6 +69,7 @@ pub struct App {
     pub triage_enum_selected: usize,
     pub triage_note_input_mode: bool,
     pub triage_note_input: String,
+    pub triage_input_target: crate::types::TriageInputTarget,
 
     // Articles
     pub articles_list: Vec<FeedItemWithFeed>,
@@ -180,6 +181,7 @@ impl App {
             triage_enum_selected: 0,
             triage_note_input_mode: false,
             triage_note_input: String::new(),
+            triage_input_target: crate::types::TriageInputTarget::default(),
             articles_list: Vec::new(),
             articles_selected: 0,
             articles_filter: String::new(),
@@ -384,6 +386,7 @@ impl App {
         } else if self.triage_note_input_mode {
             self.triage_note_input_mode = false;
             self.triage_note_input.clear();
+            self.triage_input_target = crate::types::TriageInputTarget::default();
             self.input_mode = InputMode::Normal;
         } else if self.alerts_detail_view {
             self.alerts_detail_view = false;

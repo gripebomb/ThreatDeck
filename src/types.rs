@@ -632,3 +632,10 @@ pub enum TriageEnumTarget {
     Disposition,
     Severity,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TriageInputTarget {
+    #[default]
+    Note,
+    Owner,
+}
