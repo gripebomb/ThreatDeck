@@ -2,6 +2,7 @@
 
 mod ai;
 mod alert;
+mod auto_fetch;
 mod app;
 mod article;
 mod config;
