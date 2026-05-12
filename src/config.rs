@@ -15,6 +15,7 @@ pub struct AppConfig {
     pub ioc: IocConfig,
     pub enrichment: EnrichmentConfig,
     pub triage: TriageConfig,
+    pub auto_fetch: AutoFetchConfig,
 }
 
 impl Default for AppConfig {
@@ -28,6 +29,7 @@ impl Default for AppConfig {
             ioc: IocConfig::default(),
             enrichment: EnrichmentConfig::default(),
             triage: TriageConfig::default(),
+            auto_fetch: AutoFetchConfig::default(),
         }
     }
 }
@@ -44,6 +46,22 @@ impl Default for TriageConfig {
         Self {
             hide_closed_by_default: true,
             require_disposition_on_close: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AutoFetchConfig {
+    pub enabled: bool,
+    pub interval_minutes: u32,
+}
+
+impl Default for AutoFetchConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            interval_minutes: 15,
         }
     }
 }
@@ -161,5 +179,26 @@ max_health_log_entries = 50
         assert!(config.ioc.enabled);
         assert!(config.ioc.extract_from_raw_json);
         assert!(config.enrichment.enabled);
+    }
+
+    #[test]
+    fn auto_fetch_config_defaults() {
+        let config: AppConfig = toml::from_str("").unwrap();
+        assert!(config.auto_fetch.enabled);
+        assert_eq!(config.auto_fetch.interval_minutes, 15);
+    }
+
+    #[test]
+    fn auto_fetch_config_parses_custom_values() {
+        let config: AppConfig = toml::from_str(
+            r#"
+[auto_fetch]
+enabled = false
+interval_minutes = 30
+"#,
+        )
+        .unwrap();
+        assert!(!config.auto_fetch.enabled);
+        assert_eq!(config.auto_fetch.interval_minutes, 30);
     }
 }
