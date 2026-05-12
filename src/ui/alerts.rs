@@ -135,11 +135,11 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     } else if app.alerts_bulk_mode {
         "-- BULK -- [Space] Select  [a] All  [d] Delete selected  [Esc] Cancel"
     } else if app.triage_enum_select_mode {
-        "-- SELECT -- [↑↓] Navigate  [Enter] Confirm  [Esc] Cancel"
+        "-- SELECT -- [1-9] Pick option  [0/Esc] Cancel"
     } else if app.triage_note_input_mode {
         "-- NOTE -- Type note | [Enter] Save | [Esc] Cancel"
     } else {
-        "-- NORMAL -- [r] Read  [A]ck  [I]nv  [E]sc  [C]lose  [O]pen  [N]ote  [H]ist  [D]etail  [d]Del  [b]Bulk  [c]Crit  [s]Status  [t]Disp  [/]Filter  [?]Help  [q]Quit"
+        "-- NORMAL -- [r] Read  [A] Acknowledge  [I] Investigate  [E] Escalate  [C] Close  [O] Reopen  [N] Note  [Enter] Detail  [d] Delete  [/] Filter  [?] Help  [q] Quit"
     };
     let status = Paragraph::new(status_text).style(Style::default().fg(app.theme.muted));
     f.render_widget(status, chunks[2]);
@@ -578,12 +578,16 @@ fn draw_enum_selector(f: &mut Frame, app: &App) {
 
     let list_items: Vec<ratatui::widgets::ListItem> = items
         .iter()
-        .map(|&item| ratatui::widgets::ListItem::new(item))
+        .enumerate()
+        .map(|(i, &item)| {
+            let num = i + 1;
+            ratatui::widgets::ListItem::new(format!("{num}. {item}"))
+        })
         .collect();
     let list = ratatui::widgets::List::new(list_items)
         .block(
             Block::default()
-                .title(title)
+                .title(format!("{title} — press number key"))
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(app.theme.primary)),
         )
