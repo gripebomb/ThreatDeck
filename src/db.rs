@@ -892,6 +892,12 @@ impl Db {
         Ok(count)
     }
 
+    pub fn get_feed_count(&self) -> Result<i64> {
+        let mut stmt = self.conn.prepare("SELECT COUNT(*) FROM feeds")?;
+        let count: i64 = stmt.query_row([], |row| row.get(0))?;
+        Ok(count)
+    }
+
     pub fn get_unread_alert_count(&self) -> Result<i64> {
         let mut stmt = self
             .conn

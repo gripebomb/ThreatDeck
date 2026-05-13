@@ -130,6 +130,9 @@ struct Cli {
     /// Filter --alert-list by owner
     #[arg(long)]
     alert_owner: Option<String>,
+    /// Seed the database with demo data (feeds, keywords, alerts, tags)
+    #[arg(long)]
+    seed_demo: bool,
 }
 
 fn main() -> Result<()> {
@@ -297,6 +300,16 @@ fn main() -> Result<()> {
         }
         return Ok(());
     }
+    if cli.seed_demo {
+        seed_demo_data(&db)?;
+        println!("Demo data seeded successfully.");
+        println!("  Feeds:    {}", db.get_feed_count()?);
+        println!("  Keywords: {}", db.list_keywords(false)?.len());
+        println!("  Alerts:   {}", db.get_alert_count()?);
+        println!("  Tags:     {}", db.list_tags()?.len());
+        return Ok(());
+    }
+
     if cli.alert_list {
         let status = cli.alert_status.as_deref().map(|s| match s {
             "New" => crate::types::AlertStatus::New,
@@ -668,6 +681,225 @@ fn format_extracted_indicators(indicators: &[sentinel_ioc::ExtractedIndicator]) 
         ));
     }
     output
+}
+
+fn seed_demo_data(db: &db::Db) -> Result<()> {
+    use crate::db::{AlertCreate, FeedCreate, KeywordCreate, TagCreate};
+    use crate::types::{Criticality, FeedStatus, FeedType};
+
+    // ── Feeds ───────────────────────────────────────────────────────────────
+    let feed_ids = vec![
+        db.create_feed(&FeedCreate {
+            name: "Ransomfeed.it Tracker".into(),
+            url: "https://api.ransomfeed.it/v1/posts".into(),
+            feed_type: FeedType::Api,
+            enabled: true,
+            interval_secs: 300,
+            api_template_id: None,
+            api_key: None,
+            custom_headers: None,
+            tor_proxy: None,
+        })?,
+        db.create_feed(&FeedCreate {
+            name: "RansomLook Groups".into(),
+            url: "https://api.ransomlook.io/v1/groups".into(),
+            feed_type: FeedType::Api,
+            enabled: true,
+            interval_secs: 600,
+            api_template_id: None,
+            api_key: None,
+            custom_headers: None,
+            tor_proxy: None,
+        })?,
+        db.create_feed(&FeedCreate {
+            name: "BleepingComputer".into(),
+            url: "https://www.bleepingcomputer.com/feed/".into(),
+            feed_type: FeedType::Rss,
+            enabled: true,
+            interval_secs: 300,
+            api_template_id: None,
+            api_key: None,
+            custom_headers: None,
+            tor_proxy: None,
+        })?,
+        db.create_feed(&FeedCreate {
+            name: "SecurityWeek News".into(),
+            url: "https://feeds.securityweek.com/securityweek".into(),
+            feed_type: FeedType::Rss,
+            enabled: true,
+            interval_secs: 600,
+            api_template_id: None,
+            api_key: None,
+            custom_headers: None,
+            tor_proxy: None,
+        })?,
+        db.create_feed(&FeedCreate {
+            name: "CISA Alerts".into(),
+            url: "https://www.cisa.gov/news-events/cybersecurity-advisories".into(),
+            feed_type: FeedType::Website,
+            enabled: true,
+            interval_secs: 900,
+            api_template_id: None,
+            api_key: None,
+            custom_headers: None,
+            tor_proxy: None,
+        })?,
+        db.create_feed(&FeedCreate {
+            name: "Dark Web Monitor".into(),
+            url: "http://ransomxifxwc5ste.onion/posts".into(),
+            feed_type: FeedType::Onion,
+            enabled: false,
+            interval_secs: 1200,
+            api_template_id: None,
+            api_key: None,
+            custom_headers: None,
+            tor_proxy: Some("socks5h://127.0.0.1:9050".into()),
+        })?,
+    ];
+
+    // ── Keywords ────────────────────────────────────────────────────────────
+    let keyword_ids = vec![
+        db.create_keyword(&KeywordCreate {
+            pattern: "ransomware".into(),
+            is_regex: false,
+            case_sensitive: false,
+            criticality: Criticality::Critical,
+            enabled: true,
+        })?,
+        db.create_keyword(&KeywordCreate {
+            pattern: "CVE-[0-9]{4}-[0-9]+".into(),
+            is_regex: true,
+            case_sensitive: false,
+            criticality: Criticality::High,
+            enabled: true,
+        })?,
+        db.create_keyword(&KeywordCreate {
+            pattern: "APT[0-9]+".into(),
+            is_regex: true,
+            case_sensitive: false,
+            criticality: Criticality::High,
+            enabled: true,
+        })?,
+        db.create_keyword(&KeywordCreate {
+            pattern: "zero-day".into(),
+            is_regex: false,
+            case_sensitive: false,
+            criticality: Criticality::Critical,
+            enabled: true,
+        })?,
+        db.create_keyword(&KeywordCreate {
+            pattern: "phishing".into(),
+            is_regex: false,
+            case_sensitive: false,
+            criticality: Criticality::Medium,
+            enabled: true,
+        })?,
+        db.create_keyword(&KeywordCreate {
+            pattern: "malware".into(),
+            is_regex: false,
+            case_sensitive: false,
+            criticality: Criticality::Medium,
+            enabled: true,
+        })?,
+        db.create_keyword(&KeywordCreate {
+            pattern: "exploit".into(),
+            is_regex: false,
+            case_sensitive: false,
+            criticality: Criticality::High,
+            enabled: true,
+        })?,
+        db.create_keyword(&KeywordCreate {
+            pattern: "backdoor".into(),
+            is_regex: false,
+            case_sensitive: false,
+            criticality: Criticality::Critical,
+            enabled: true,
+        })?,
+    ];
+
+    // ── Alerts ──────────────────────────────────────────────────────────────
+    let alerts = vec![
+        (0, 0, "LockBit hits healthcare provider", "LockBit ransomware group claims attack on major healthcare provider, exfiltrating 2TB of patient data including medical records and insurance information.", Criticality::Critical),
+        (0, 0, "BlackCat targets energy sector", "ALPHV/BlackCat ransomware operators have breached a European energy company, deploying encryption across Windows and Linux systems.", Criticality::Critical),
+        (0, 6, "Ransomware exploit chain disclosed", "Security researchers disclose a new exploit chain used by ransomware groups leveraging CVE-2024-1234 for initial access.", Criticality::High),
+        (1, 2, "APT29 targets diplomatic missions", "Cozy Bear (APT29) has been observed targeting diplomatic missions in Eastern Europe with sophisticated spear-phishing campaigns.", Criticality::High),
+        (1, 2, "APT42 Iran-linked activity surge", "Mandiant reports increased activity from APT42, an Iran-nexus actor targeting journalists and academics with credential harvesting.", Criticality::High),
+        (2, 1, "Critical CVE-2024-9876 in OpenSSL", "A critical buffer overflow vulnerability has been discovered in OpenSSL 3.0.x allowing remote code execution under specific configurations.", Criticality::High),
+        (2, 3, "Chrome zero-day exploited in wild", "Google confirms active exploitation of a zero-day vulnerability (CVE-2024-8765) in Chrome. Patch immediately.", Criticality::Critical),
+        (2, 4, "Phishing campaign targets banks", "A large-scale phishing campaign using brand impersonation of major banks has been detected, affecting users across 12 countries.", Criticality::Medium),
+        (3, 5, "New InfoStealer malware family", "Researchers identify a new information stealer malware dubbed \"LummaC2\" being distributed via malicious Google Ads.", Criticality::Medium),
+        (3, 7, "Supply chain backdoor discovered", "A backdoor has been discovered in a popular npm package downloaded over 2 million times weekly. The malicious code exfiltrates environment variables.", Criticality::Critical),
+        (4, 6, "CISA adds CVE-2024-5432 to KEV catalog", "CISA has added CVE-2024-5432 to the Known Exploited Vulnerabilities catalog, requiring federal agencies to patch by January 30.", Criticality::High),
+        (4, 3, "Zero-day in enterprise VPN appliances", "CISA warns of active exploitation of a zero-day vulnerability in widely deployed enterprise VPN appliances. No patch available yet.", Criticality::Critical),
+        (4, 1, "Microsoft Patch Tuesday: 87 CVEs", "Microsoft releases January 2024 Patch Tuesday updates addressing 87 CVEs including 6 critical remote code execution vulnerabilities.", Criticality::Medium),
+        (0, 7, "Ransomware deploys persistent backdoor", "Analysis reveals that recent ransomware deployments include a persistent backdoor mechanism ensuring re-entry even after remediation.", Criticality::Critical),
+        (2, 5, "TrickBot malware resurfaces", "TrickBot malware infrastructure shows signs of reactivation with new command and control servers identified in Eastern Europe.", Criticality::Medium),
+    ];
+
+    for (i, (feed_idx, kw_idx, title, snippet, crit)) in alerts.iter().enumerate() {
+        let hash = format!("demo-alert-hash-{:04}", i);
+        db.create_alert(&AlertCreate {
+            feed_id: feed_ids[*feed_idx],
+            keyword_id: keyword_ids[*kw_idx],
+            title: Some(title.to_string()),
+            content_snippet: snippet.to_string(),
+            criticality: *crit,
+            content_hash: hash,
+            metadata_json: None,
+        })?;
+    }
+
+    // ── Tags ────────────────────────────────────────────────────────────────
+    // Build a map of existing tag names to IDs so we can reuse built-in tags
+    let existing_tags: std::collections::HashMap<String, i64> = db
+        .list_tags()?
+        .into_iter()
+        .map(|tag| (tag.name.clone(), tag.id))
+        .collect();
+
+    let mut tag_ids = Vec::new();
+    for (name, color, description) in [
+        ("API", "#4CAF50", "REST API feeds"),
+        ("News", "#FF9800", "General security news"),
+        ("Government", "#9C27B0", "Government security sources"),
+        ("Dark Web", "#333333", "Tor/onion sources"),
+        ("Ransomware Gang", "#FF6B6B", "Dark web ransomware sources"),
+    ] {
+        let id = if let Some(&id) = existing_tags.get(name) {
+            id
+        } else {
+            db.create_tag(&TagCreate {
+                name: name.into(),
+                color: color.into(),
+                description: Some(description.into()),
+            })?
+        };
+        tag_ids.push(id);
+    }
+
+    // ── Tag assignments ─────────────────────────────────────────────────────
+    db.assign_tag_to_feed(feed_ids[0], tag_ids[0])?; // Ransomfeed -> API
+    db.assign_tag_to_feed(feed_ids[0], tag_ids[4])?; // Ransomfeed -> Ransomware Gang
+    db.assign_tag_to_feed(feed_ids[1], tag_ids[0])?; // RansomLook -> API
+    db.assign_tag_to_feed(feed_ids[1], tag_ids[4])?; // RansomLook -> Ransomware Gang
+    db.assign_tag_to_feed(feed_ids[2], tag_ids[1])?; // BleepingComputer -> News
+    db.assign_tag_to_feed(feed_ids[3], tag_ids[1])?; // SecurityWeek -> News
+    db.assign_tag_to_feed(feed_ids[4], tag_ids[2])?; // CISA -> Government
+    db.assign_tag_to_feed(feed_ids[5], tag_ids[3])?; // Dark Web Monitor -> Dark Web
+
+    db.assign_tag_to_keyword(keyword_ids[0], tag_ids[4])?; // ransomware -> Ransomware Gang
+    db.assign_tag_to_keyword(keyword_ids[1], tag_ids[2])?; // CVE -> Government
+    db.assign_tag_to_keyword(keyword_ids[3], tag_ids[2])?; // zero-day -> Government
+
+    // ── Health logs ─────────────────────────────────────────────────────────
+    db.add_health_log(feed_ids[0], FeedStatus::Healthy, None)?;
+    db.add_health_log(feed_ids[1], FeedStatus::Healthy, None)?;
+    db.add_health_log(feed_ids[2], FeedStatus::Healthy, None)?;
+    db.add_health_log(feed_ids[3], FeedStatus::Warning, Some("RSS parse warning: unexpected element"))?;
+    db.add_health_log(feed_ids[4], FeedStatus::Healthy, None)?;
+    db.add_health_log(feed_ids[5], FeedStatus::Disabled, Some("Feed disabled: Tor proxy unreachable"))?;
+
+    Ok(())
 }
 
 fn truncate_display(value: &str, max_chars: usize) -> String {
