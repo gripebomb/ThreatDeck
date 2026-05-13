@@ -69,10 +69,6 @@ CREATE INDEX IF NOT EXISTS idx_alerts_keyword ON alerts(keyword_id);
 CREATE INDEX IF NOT EXISTS idx_alerts_detected ON alerts(detected_at);
 CREATE INDEX IF NOT EXISTS idx_alerts_read ON alerts(read);
 CREATE INDEX IF NOT EXISTS idx_alerts_hash ON alerts(content_hash);
-CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status);
-CREATE INDEX IF NOT EXISTS idx_alerts_disposition ON alerts(disposition);
-CREATE INDEX IF NOT EXISTS idx_alerts_owner ON alerts(owner);
-CREATE INDEX IF NOT EXISTS idx_alerts_closed_at ON alerts(closed_at);
 
 CREATE TABLE IF NOT EXISTS indicators (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
