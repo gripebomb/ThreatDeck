@@ -622,6 +622,101 @@ impl Db {
         Ok(stored_items)
     }
 
+    pub fn record_feed_fetch_attempt(
+        &self,
+        feed_id: i64,
+        attempt: &crate::feed::diagnostics::FetchAttempt,
+    ) -> Result<i64> {
+        let diagnostic = attempt.diagnostic.as_ref();
+        self.conn.execute(
+            "INSERT INTO feed_fetch_attempts
+             (feed_id, success, url, final_url, http_status, elapsed_ms,
+              failure_phase, failure_kind, error_summary, error_detail, items_seen, items_new)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                feed_id,
+                attempt.success as i64,
+                attempt.url,
+                attempt.final_url,
+                attempt.http_status.map(|status| status as i64),
+                attempt.elapsed_ms as i64,
+                diagnostic.map(|d| d.phase.label()),
+                diagnostic.map(|d| d.kind.label()),
+                diagnostic.map(|d| d.summary.as_str()),
+                diagnostic.and_then(|d| d.detail.as_deref()),
+                attempt.items_seen.map(|value| value as i64),
+                attempt.items_new.map(|value| value as i64),
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn list_feed_fetch_attempts(
+        &self,
+        feed_id: i64,
+        limit: usize,
+    ) -> Result<Vec<crate::feed::diagnostics::FetchAttempt>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, feed_id, attempted_at, success, url, final_url, http_status, elapsed_ms,
+                    failure_phase, failure_kind, error_summary, error_detail, items_seen, items_new
+             FROM feed_fetch_attempts
+             WHERE feed_id = ?1
+             ORDER BY attempted_at DESC, id DESC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![feed_id, limit as i64], Self::row_to_fetch_attempt)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    fn row_to_fetch_attempt(
+        row: &rusqlite::Row,
+    ) -> rusqlite::Result<crate::feed::diagnostics::FetchAttempt> {
+        use crate::feed::diagnostics::{
+            FetchAttempt, FetchDiagnostic, FetchFailureKind, FetchFailurePhase,
+        };
+
+        let attempted_at: String = row.get(2)?;
+        let url: String = row.get(4)?;
+        let final_url: Option<String> = row.get(5)?;
+        let http_status = row.get::<_, Option<i64>>(6)?.map(|status| status as u16);
+        let elapsed_ms = row.get::<_, i64>(7)? as u128;
+        let failure_phase: Option<String> = row.get(8)?;
+        let failure_kind: Option<String> = row.get(9)?;
+        let error_summary: Option<String> = row.get(10)?;
+        let error_detail: Option<String> = row.get(11)?;
+
+        let diagnostic = error_summary.map(|summary| FetchDiagnostic {
+            phase: failure_phase
+                .as_deref()
+                .map(FetchFailurePhase::from_label)
+                .unwrap_or(FetchFailurePhase::Unknown),
+            kind: failure_kind
+                .as_deref()
+                .map(FetchFailureKind::from_label)
+                .unwrap_or(FetchFailureKind::Unknown),
+            summary,
+            detail: error_detail,
+            http_status,
+            url: url.clone(),
+            final_url: final_url.clone(),
+            elapsed_ms,
+        });
+
+        Ok(FetchAttempt {
+            id: row.get(0)?,
+            feed_id: row.get(1)?,
+            attempted_at: parse_db_datetime(&attempted_at),
+            success: row.get::<_, i64>(3)? != 0,
+            url,
+            final_url,
+            http_status,
+            elapsed_ms,
+            diagnostic,
+            items_seen: row.get::<_, Option<i64>>(12)?.map(|value| value as usize),
+            items_new: row.get::<_, Option<i64>>(13)?.map(|value| value as usize),
+        })
+    }
+
     fn row_to_feed_item_with_feed(row: &rusqlite::Row) -> rusqlite::Result<FeedItemWithFeed> {
         let published: Option<String> = row.get(7)?;
         let fetched: String = row.get(8)?;
@@ -2435,6 +2530,54 @@ mod tests {
         assert!(feed.last_failure_phase.is_none());
         assert!(feed.last_failure_kind.is_none());
         assert!(feed.last_http_status.is_none());
+    }
+
+    #[test]
+    fn records_fetch_attempts_newest_first() {
+        let db = Db::new_in_memory_for_tests();
+        db.init_schema().unwrap();
+        let feed_id = db
+            .create_feed(&FeedCreate {
+                name: "Example".into(),
+                url: "https://example.test/feed.xml".into(),
+                feed_type: FeedType::Rss,
+                enabled: true,
+                interval_secs: 300,
+                api_template_id: None,
+                api_key: None,
+                custom_headers: None,
+                tor_proxy: None,
+            })
+            .unwrap();
+
+        let failed = crate::feed::diagnostics::FetchAttempt {
+            id: None,
+            feed_id: Some(feed_id),
+            attempted_at: None,
+            success: false,
+            url: "https://example.test/feed.xml".into(),
+            final_url: None,
+            http_status: Some(404),
+            elapsed_ms: 25,
+            diagnostic: Some(crate::feed::diagnostics::classify_http_status(
+                "https://example.test/feed.xml",
+                404,
+                25,
+            )),
+            items_seen: None,
+            items_new: None,
+        };
+
+        db.record_feed_fetch_attempt(feed_id, &failed).unwrap();
+
+        let attempts = db.list_feed_fetch_attempts(feed_id, 10).unwrap();
+        assert_eq!(attempts.len(), 1);
+        assert!(!attempts[0].success);
+        assert_eq!(attempts[0].http_status, Some(404));
+        assert_eq!(
+            attempts[0].diagnostic.as_ref().unwrap().summary,
+            "Feed returned HTTP 404"
+        );
     }
 
     #[test]
