@@ -171,7 +171,10 @@ fn draw_detail(f: &mut Frame, app: &App) {
         format!("Interval: {}s", feed.feed.interval_secs),
         format!("Status: {}", feed.status.label()),
         format!("Failures: {}", feed.feed.consecutive_failures),
-        format!("Last fetch: {}", format_optional_ts(feed.feed.last_fetch_at)),
+        format!(
+            "Last fetch: {}",
+            format_optional_ts(feed.feed.last_fetch_at)
+        ),
         format!(
             "Last success: {}",
             format_optional_ts(feed.feed.last_fetch_success_at)

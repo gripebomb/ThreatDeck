@@ -84,8 +84,7 @@ impl FeedManager {
             }
             Err(error) => {
                 let elapsed_ms = started.elapsed().as_millis();
-                let diagnostic =
-                    diagnostics::classify_anyhow_error(&feed.url, &error, elapsed_ms);
+                let diagnostic = diagnostics::classify_anyhow_error(&feed.url, &error, elapsed_ms);
                 FeedFetchOutcome {
                     result: None,
                     attempt: diagnostics::FetchAttempt {

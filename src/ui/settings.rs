@@ -550,14 +550,19 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
                 );
             }
         }
-        KeyCode::Char('+') | KeyCode::Char('=') if matches!(app.settings_tab, SettingsTab::General) => {
+        KeyCode::Char('+') | KeyCode::Char('=')
+            if matches!(app.settings_tab, SettingsTab::General) =>
+        {
             if app.settings_auto_fetch_interval < 60 {
                 app.settings_auto_fetch_interval += 5;
                 if app.settings_auto_fetch_enabled {
                     app.restart_auto_fetch();
                 }
                 app.set_notification(
-                    format!("Auto-fetch interval: {} min", app.settings_auto_fetch_interval),
+                    format!(
+                        "Auto-fetch interval: {} min",
+                        app.settings_auto_fetch_interval
+                    ),
                     crate::types::NotificationType::Info,
                 );
             }
@@ -569,7 +574,10 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
                     app.restart_auto_fetch();
                 }
                 app.set_notification(
-                    format!("Auto-fetch interval: {} min", app.settings_auto_fetch_interval),
+                    format!(
+                        "Auto-fetch interval: {} min",
+                        app.settings_auto_fetch_interval
+                    ),
                     crate::types::NotificationType::Info,
                 );
             }

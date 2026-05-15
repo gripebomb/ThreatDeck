@@ -161,49 +161,55 @@ impl Db {
         }
         // Idempotent triage schema migration (v2026-05-11)
         let _ = self.conn.execute(
-            "ALTER TABLE alerts ADD COLUMN status TEXT NOT NULL DEFAULT 'New'", [],
+            "ALTER TABLE alerts ADD COLUMN status TEXT NOT NULL DEFAULT 'New'",
+            [],
         );
         let _ = self.conn.execute(
-            "ALTER TABLE alerts ADD COLUMN disposition TEXT NOT NULL DEFAULT 'Unknown'", [],
+            "ALTER TABLE alerts ADD COLUMN disposition TEXT NOT NULL DEFAULT 'Unknown'",
+            [],
+        );
+        let _ = self
+            .conn
+            .execute("ALTER TABLE alerts ADD COLUMN severity_override TEXT", []);
+        let _ = self
+            .conn
+            .execute("ALTER TABLE alerts ADD COLUMN confidence_score INTEGER", []);
+        let _ = self
+            .conn
+            .execute("ALTER TABLE alerts ADD COLUMN owner TEXT", []);
+        let _ = self
+            .conn
+            .execute("ALTER TABLE alerts ADD COLUMN triage_notes TEXT", []);
+        let _ = self
+            .conn
+            .execute("ALTER TABLE alerts ADD COLUMN acknowledged_at TEXT", []);
+        let _ = self
+            .conn
+            .execute("ALTER TABLE alerts ADD COLUMN investigating_at TEXT", []);
+        let _ = self
+            .conn
+            .execute("ALTER TABLE alerts ADD COLUMN escalated_at TEXT", []);
+        let _ = self
+            .conn
+            .execute("ALTER TABLE alerts ADD COLUMN closed_at TEXT", []);
+        let _ = self
+            .conn
+            .execute("ALTER TABLE alerts ADD COLUMN closed_reason TEXT", []);
+        let _ = self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status)",
+            [],
         );
         let _ = self.conn.execute(
-            "ALTER TABLE alerts ADD COLUMN severity_override TEXT", [],
+            "CREATE INDEX IF NOT EXISTS idx_alerts_disposition ON alerts(disposition)",
+            [],
         );
         let _ = self.conn.execute(
-            "ALTER TABLE alerts ADD COLUMN confidence_score INTEGER", [],
+            "CREATE INDEX IF NOT EXISTS idx_alerts_owner ON alerts(owner)",
+            [],
         );
         let _ = self.conn.execute(
-            "ALTER TABLE alerts ADD COLUMN owner TEXT", [],
-        );
-        let _ = self.conn.execute(
-            "ALTER TABLE alerts ADD COLUMN triage_notes TEXT", [],
-        );
-        let _ = self.conn.execute(
-            "ALTER TABLE alerts ADD COLUMN acknowledged_at TEXT", [],
-        );
-        let _ = self.conn.execute(
-            "ALTER TABLE alerts ADD COLUMN investigating_at TEXT", [],
-        );
-        let _ = self.conn.execute(
-            "ALTER TABLE alerts ADD COLUMN escalated_at TEXT", [],
-        );
-        let _ = self.conn.execute(
-            "ALTER TABLE alerts ADD COLUMN closed_at TEXT", [],
-        );
-        let _ = self.conn.execute(
-            "ALTER TABLE alerts ADD COLUMN closed_reason TEXT", [],
-        );
-        let _ = self.conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status)", [],
-        );
-        let _ = self.conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_alerts_disposition ON alerts(disposition)", [],
-        );
-        let _ = self.conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_alerts_owner ON alerts(owner)", [],
-        );
-        let _ = self.conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_alerts_closed_at ON alerts(closed_at)", [],
+            "CREATE INDEX IF NOT EXISTS idx_alerts_closed_at ON alerts(closed_at)",
+            [],
         );
         let _ = self.conn.execute(
             "CREATE TABLE IF NOT EXISTS alert_triage_events (
@@ -216,18 +222,21 @@ impl Db {
                 actor TEXT NOT NULL DEFAULT 'local',
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY(alert_id) REFERENCES alerts(id) ON DELETE CASCADE
-            )", [],
+            )",
+            [],
         );
         let _ = self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_triage_events_alert ON alert_triage_events(alert_id, created_at)", [],
         );
         // Idempotent feed fetch diagnostics migration (v2026-05-15)
-        let _ = self
-            .conn
-            .execute("ALTER TABLE feeds ADD COLUMN last_fetch_success_at TIMESTAMP", []);
-        let _ = self
-            .conn
-            .execute("ALTER TABLE feeds ADD COLUMN last_fetch_failed_at TIMESTAMP", []);
+        let _ = self.conn.execute(
+            "ALTER TABLE feeds ADD COLUMN last_fetch_success_at TIMESTAMP",
+            [],
+        );
+        let _ = self.conn.execute(
+            "ALTER TABLE feeds ADD COLUMN last_fetch_failed_at TIMESTAMP",
+            [],
+        );
         let _ = self
             .conn
             .execute("ALTER TABLE feeds ADD COLUMN last_failure_phase TEXT", []);
@@ -1206,13 +1215,11 @@ impl Db {
         status: AlertStatus,
         note: Option<&str>,
     ) -> Result<()> {
-        let old_status: String = self
-            .conn
-            .query_row(
-                "SELECT status FROM alerts WHERE id = ?1",
-                [alert_id],
-                |row| row.get(0),
-            )?;
+        let old_status: String = self.conn.query_row(
+            "SELECT status FROM alerts WHERE id = ?1",
+            [alert_id],
+            |row| row.get(0),
+        )?;
         let timestamp_col = match status {
             AlertStatus::Acknowledged => "acknowledged_at",
             AlertStatus::Investigating => "investigating_at",
@@ -1225,7 +1232,8 @@ impl Db {
             format!(", {timestamp_col} = CASE WHEN {timestamp_col} IS NULL THEN CURRENT_TIMESTAMP ELSE {timestamp_col} END")
         };
         let sql = format!("UPDATE alerts SET status = ?1{ts_sql} WHERE id = ?2");
-        self.conn.execute(&sql, params![format!("{:?}", status), alert_id])?;
+        self.conn
+            .execute(&sql, params![format!("{:?}", status), alert_id])?;
         self.insert_triage_event(
             alert_id,
             "status_changed",
@@ -1242,13 +1250,11 @@ impl Db {
         disposition: AlertDisposition,
         note: Option<&str>,
     ) -> Result<()> {
-        let old_disp: String = self
-            .conn
-            .query_row(
-                "SELECT disposition FROM alerts WHERE id = ?1",
-                [alert_id],
-                |row| row.get(0),
-            )?;
+        let old_disp: String = self.conn.query_row(
+            "SELECT disposition FROM alerts WHERE id = ?1",
+            [alert_id],
+            |row| row.get(0),
+        )?;
         self.conn.execute(
             "UPDATE alerts SET disposition = ?1 WHERE id = ?2",
             params![format!("{:?}", disposition), alert_id],
@@ -1269,13 +1275,11 @@ impl Db {
         severity: Option<Criticality>,
         note: Option<&str>,
     ) -> Result<()> {
-        let old_sev: Option<String> = self
-            .conn
-            .query_row(
-                "SELECT severity_override FROM alerts WHERE id = ?1",
-                [alert_id],
-                |row| row.get(0),
-            )?;
+        let old_sev: Option<String> = self.conn.query_row(
+            "SELECT severity_override FROM alerts WHERE id = ?1",
+            [alert_id],
+            |row| row.get(0),
+        )?;
         self.conn.execute(
             "UPDATE alerts SET severity_override = ?1 WHERE id = ?2",
             params![severity.map(|c| format!("{:?}", c)), alert_id],
@@ -1296,13 +1300,11 @@ impl Db {
         confidence: Option<i64>,
         note: Option<&str>,
     ) -> Result<()> {
-        let old_conf: Option<i64> = self
-            .conn
-            .query_row(
-                "SELECT confidence_score FROM alerts WHERE id = ?1",
-                [alert_id],
-                |row| row.get(0),
-            )?;
+        let old_conf: Option<i64> = self.conn.query_row(
+            "SELECT confidence_score FROM alerts WHERE id = ?1",
+            [alert_id],
+            |row| row.get(0),
+        )?;
         self.conn.execute(
             "UPDATE alerts SET confidence_score = ?1 WHERE id = ?2",
             params![confidence, alert_id],
@@ -1323,24 +1325,16 @@ impl Db {
         owner: Option<&str>,
         note: Option<&str>,
     ) -> Result<()> {
-        let old_owner: Option<String> = self
-            .conn
-            .query_row(
-                "SELECT owner FROM alerts WHERE id = ?1",
-                [alert_id],
-                |row| row.get(0),
-            )?;
+        let old_owner: Option<String> = self.conn.query_row(
+            "SELECT owner FROM alerts WHERE id = ?1",
+            [alert_id],
+            |row| row.get(0),
+        )?;
         self.conn.execute(
             "UPDATE alerts SET owner = ?1 WHERE id = ?2",
             params![owner, alert_id],
         )?;
-        self.insert_triage_event(
-            alert_id,
-            "owner_changed",
-            old_owner.as_deref(),
-            owner,
-            note,
-        )?;
+        self.insert_triage_event(alert_id, "owner_changed", old_owner.as_deref(), owner, note)?;
         Ok(())
     }
 
@@ -1372,13 +1366,11 @@ impl Db {
         disposition: AlertDisposition,
         reason: Option<&str>,
     ) -> Result<()> {
-        let old_status: String = self
-            .conn
-            .query_row(
-                "SELECT status FROM alerts WHERE id = ?1",
-                [alert_id],
-                |row| row.get(0),
-            )?;
+        let old_status: String = self.conn.query_row(
+            "SELECT status FROM alerts WHERE id = ?1",
+            [alert_id],
+            |row| row.get(0),
+        )?;
         self.conn.execute(
             "UPDATE alerts SET status = 'Closed', disposition = ?1, closed_at = CURRENT_TIMESTAMP, closed_reason = ?2 WHERE id = ?3",
             params![format!("{:?}", disposition), reason, alert_id],
@@ -1401,13 +1393,11 @@ impl Db {
     }
 
     pub fn reopen_alert(&self, alert_id: i64, note: Option<&str>) -> Result<()> {
-        let old_status: String = self
-            .conn
-            .query_row(
-                "SELECT status FROM alerts WHERE id = ?1",
-                [alert_id],
-                |row| row.get(0),
-            )?;
+        let old_status: String = self.conn.query_row(
+            "SELECT status FROM alerts WHERE id = ?1",
+            [alert_id],
+            |row| row.get(0),
+        )?;
         self.conn.execute(
             "UPDATE alerts SET status = 'Acknowledged', closed_at = NULL, closed_reason = NULL WHERE id = ?1",
             [alert_id],
@@ -1437,12 +1427,13 @@ impl Db {
             "UPDATE alerts SET status = ?1 WHERE id IN ({})",
             placeholders.join(",")
         );
-        let mut params: Vec<&dyn rusqlite::ToSql> =
-            vec![&status_str as &dyn rusqlite::ToSql];
+        let mut params: Vec<&dyn rusqlite::ToSql> = vec![&status_str as &dyn rusqlite::ToSql];
         for id in alert_ids {
             params.push(id);
         }
-        let count = self.conn.execute(&sql, rusqlite::params_from_iter(params))?;
+        let count = self
+            .conn
+            .execute(&sql, rusqlite::params_from_iter(params))?;
         for alert_id in alert_ids {
             let _ = self.insert_triage_event(
                 *alert_id,
@@ -1460,30 +1451,32 @@ impl Db {
             "SELECT id, alert_id, event_type, old_value, new_value, note, actor, created_at
              FROM alert_triage_events
              WHERE alert_id = ?1
-             ORDER BY created_at ASC, id ASC"
+             ORDER BY created_at ASC, id ASC",
         )?;
         let rows = stmt.query_map([alert_id], Self::row_to_triage_event)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     pub fn get_alert_status_counts(&self) -> Result<HashMap<String, i64>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT status, COUNT(*) FROM alerts GROUP BY status"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT status, COUNT(*) FROM alerts GROUP BY status")?;
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
         })?;
-        rows.collect::<Result<HashMap<_, _>, _>>().map_err(Into::into)
+        rows.collect::<Result<HashMap<_, _>, _>>()
+            .map_err(Into::into)
     }
 
     pub fn get_alert_disposition_counts(&self) -> Result<HashMap<String, i64>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT disposition, COUNT(*) FROM alerts GROUP BY disposition"
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT disposition, COUNT(*) FROM alerts GROUP BY disposition")?;
         let rows = stmt.query_map([], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
         })?;
-        rows.collect::<Result<HashMap<_, _>, _>>().map_err(Into::into)
+        rows.collect::<Result<HashMap<_, _>, _>>()
+            .map_err(Into::into)
     }
 
     fn insert_triage_event(
@@ -3439,7 +3432,8 @@ mod tests {
         assert!(alert.triage_notes.is_none());
 
         // Add a note
-        db.add_alert_note(alert_id, "First investigation note").unwrap();
+        db.add_alert_note(alert_id, "First investigation note")
+            .unwrap();
 
         // Verify via get_alert
         let alert = db.get_alert(alert_id).unwrap().unwrap();
@@ -3449,11 +3443,20 @@ mod tests {
         );
 
         // Add second note
-        db.add_alert_note(alert_id, "Second follow-up note").unwrap();
+        db.add_alert_note(alert_id, "Second follow-up note")
+            .unwrap();
 
         let alert = db.get_alert(alert_id).unwrap().unwrap();
-        assert!(alert.triage_notes.as_deref().unwrap().contains("First investigation note"));
-        assert!(alert.triage_notes.as_deref().unwrap().contains("Second follow-up note"));
+        assert!(alert
+            .triage_notes
+            .as_deref()
+            .unwrap()
+            .contains("First investigation note"));
+        assert!(alert
+            .triage_notes
+            .as_deref()
+            .unwrap()
+            .contains("Second follow-up note"));
 
         // Verify via list_alerts
         let alerts = db.list_alerts(&AlertFilter::default()).unwrap();
@@ -3510,20 +3513,28 @@ mod tests {
             .unwrap();
 
         // Acknowledge
-        db.update_alert_status(alert_id, AlertStatus::Acknowledged, None).unwrap();
+        db.update_alert_status(alert_id, AlertStatus::Acknowledged, None)
+            .unwrap();
         let alert = db.get_alert(alert_id).unwrap().unwrap();
         assert_eq!(alert.status, AlertStatus::Acknowledged);
         assert!(alert.acknowledged_at.is_some());
 
         // Investigate
-        db.update_alert_status(alert_id, AlertStatus::Investigating, None).unwrap();
+        db.update_alert_status(alert_id, AlertStatus::Investigating, None)
+            .unwrap();
         let alert = db.get_alert(alert_id).unwrap().unwrap();
         assert_eq!(alert.status, AlertStatus::Investigating);
         assert!(alert.investigating_at.is_some());
 
         // Close
-        db.update_alert_disposition(alert_id, AlertDisposition::FalsePositive, None).unwrap();
-        db.close_alert(alert_id, AlertDisposition::FalsePositive, Some("Verified benign")).unwrap();
+        db.update_alert_disposition(alert_id, AlertDisposition::FalsePositive, None)
+            .unwrap();
+        db.close_alert(
+            alert_id,
+            AlertDisposition::FalsePositive,
+            Some("Verified benign"),
+        )
+        .unwrap();
         let alert = db.get_alert(alert_id).unwrap().unwrap();
         assert_eq!(alert.status, AlertStatus::Closed);
         assert_eq!(alert.disposition, AlertDisposition::FalsePositive);
@@ -3531,7 +3542,8 @@ mod tests {
         assert_eq!(alert.closed_reason.as_deref(), Some("Verified benign"));
 
         // Reopen
-        db.reopen_alert(alert_id, Some("Re-opening for review")).unwrap();
+        db.reopen_alert(alert_id, Some("Re-opening for review"))
+            .unwrap();
         let alert = db.get_alert(alert_id).unwrap().unwrap();
         assert_eq!(alert.status, AlertStatus::Acknowledged);
         assert!(alert.closed_at.is_none());

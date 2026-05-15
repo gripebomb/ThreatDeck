@@ -4,7 +4,6 @@ use std::time::Instant;
 
 use crate::auto_fetch::{AutoFetchMessage, AutoFetcher};
 use crate::config::{AppConfig, Paths};
-use std::sync::mpsc;
 use crate::db::{
     AlertFilter, Db, EnrichmentJobWithContext, EnrichmentProviderRecord, IndicatorRecord,
     IndicatorSearch,
@@ -12,6 +11,7 @@ use crate::db::{
 use crate::theme::{get_runtime_theme, Theme};
 use crate::types::*;
 use crate::ui;
+use std::sync::mpsc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputMode {
@@ -301,10 +301,8 @@ impl App {
                         let notif_type = if errors.is_empty() {
                             crate::types::NotificationType::Success
                         } else {
-                            msg_text.push_str(&format!(
-                                " ({} error(s) — check logs)",
-                                errors.len()
-                            ));
+                            msg_text
+                                .push_str(&format!(" ({} error(s) — check logs)", errors.len()));
                             crate::types::NotificationType::Warning
                         };
                         self.set_notification(msg_text, notif_type);
