@@ -89,6 +89,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download release artifacts
         uses: actions/download-artifact@v4
         with:
@@ -101,38 +104,20 @@ jobs:
           sha256sum * > SHA256SUMS
           cat SHA256SUMS
 
+      - name: Prepare release notes
+        run: |
+          NOTES_FILE=".github/release-notes/${{ github.ref_name }}.md"
+          if [ -f "$NOTES_FILE" ]; then
+            cp "$NOTES_FILE" RELEASE_NOTES.md
+          else
+            cp .github/release-notes/default.md RELEASE_NOTES.md
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: Release ${{ github.ref_name }}
-          body: |
-            ## ThreatDeck ${{ github.ref_name }}
-
-            ### Binaries
-
-            | Platform | Architecture | Artifact |
-            |----------|--------------|----------|
-            | Linux    | x86_64       | `ThreatDeck-x86_64-linux` |
-            | macOS    | x86_64       | `ThreatDeck-x86_64-macos` |
-            | macOS    | Apple Silicon / ARM64 | `ThreatDeck-aarch64-macos` |
-
-            ### Installation
-
-            Download the binary for your platform, make it executable, and place it in your `$PATH`:
-
-            ```bash
-            chmod +x ThreatDeck-<platform>
-            sudo mv ThreatDeck-<platform> /usr/local/bin/ThreatDeck
-            ```
-
-            ### Verification
-
-            Verify the checksum:
-
-            ```bash
-            sha256sum -c SHA256SUMS
-            ```
-
+          body_path: RELEASE_NOTES.md
           files: |
             dist/ThreatDeck-x86_64-linux
             dist/ThreatDeck-x86_64-macos
