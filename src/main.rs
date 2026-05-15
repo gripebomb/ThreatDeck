@@ -2,9 +2,9 @@
 
 mod ai;
 mod alert;
-mod auto_fetch;
 mod app;
 mod article;
+mod auto_fetch;
 mod config;
 mod db;
 mod enrichment;
@@ -133,6 +133,12 @@ struct Cli {
     /// Seed the database with demo data (feeds, keywords, alerts, tags)
     #[arg(long)]
     seed_demo: bool,
+    /// Fetch one stored feed by ID, record diagnostics, print a report, and exit
+    #[arg(long)]
+    debug_feed_id: Option<i64>,
+    /// Fetch one URL without storing it, print diagnostics, and exit
+    #[arg(long)]
+    check_feed: Option<String>,
 }
 
 fn main() -> Result<()> {
@@ -164,6 +170,16 @@ fn main() -> Result<()> {
     let app_config = config::load_app_config(&paths.config_file)?;
     let db = db::Db::open(&paths.db_file)?;
     db.init_schema().context("initializing database schema")?;
+
+    if let Some(id) = cli.debug_feed_id {
+        debug_stored_feed(&db, id)?;
+        return Ok(());
+    }
+
+    if let Some(url) = cli.check_feed.as_deref() {
+        check_feed_url(url);
+        return Ok(());
+    }
 
     if cli.enrich_once {
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -378,6 +394,93 @@ fn main() -> Result<()> {
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
 
     res
+}
+
+fn debug_stored_feed(db: &db::Db, feed_id: i64) -> Result<()> {
+    let feed = db
+        .get_feed(feed_id)?
+        .with_context(|| format!("feed not found: {feed_id}"))?;
+    let template = match feed.api_template_id {
+        Some(template_id) => db.get_template(template_id)?,
+        None => None,
+    };
+    let outcome = feed::FeedManager::run_fetch_attempt(&feed, template);
+    let content_hash = outcome
+        .result
+        .as_ref()
+        .map(|result| result.content_hash.as_str());
+    db.record_feed_fetch_outcome(feed.id, &outcome.attempt, content_hash)?;
+    print!(
+        "{}",
+        format_feed_diagnostic_report(Some(&feed.name), &outcome.attempt)
+    );
+    Ok(())
+}
+
+fn check_feed_url(url: &str) {
+    let feed = types::Feed {
+        id: 0,
+        name: "Ad hoc feed check".into(),
+        url: url.to_string(),
+        feed_type: types::FeedType::Rss,
+        enabled: true,
+        interval_secs: 300,
+        last_fetch_at: None,
+        last_error: None,
+        last_fetch_success_at: None,
+        last_fetch_failed_at: None,
+        last_failure_phase: None,
+        last_failure_kind: None,
+        last_http_status: None,
+        consecutive_failures: 0,
+        content_hash: None,
+        created_at: chrono::Utc::now(),
+        api_template_id: None,
+        api_key: None,
+        custom_headers: None,
+        tor_proxy: None,
+    };
+    let outcome = feed::FeedManager::run_fetch_attempt(&feed, None);
+    print!("{}", format_feed_diagnostic_report(None, &outcome.attempt));
+}
+
+fn format_feed_diagnostic_report(
+    feed_name: Option<&str>,
+    attempt: &feed::diagnostics::FetchAttempt,
+) -> String {
+    let status = if attempt.success { "ok" } else { "failed" };
+    let mut output = String::new();
+    output.push_str("Feed diagnostic report\n");
+    if let Some(feed_name) = feed_name {
+        output.push_str(&format!("Feed: {feed_name}\n"));
+    }
+    output.push_str(&format!("URL: {}\n", attempt.url));
+    if let Some(final_url) = attempt.final_url.as_deref() {
+        output.push_str(&format!("Final URL: {final_url}\n"));
+    }
+    output.push_str(&format!("Result: {status}\n"));
+    output.push_str(&format!("Elapsed: {}ms\n", attempt.elapsed_ms));
+    if let Some(http_status) = attempt.http_status {
+        output.push_str(&format!("HTTP status: {http_status}\n"));
+    }
+
+    if let Some(items_seen) = attempt.items_seen {
+        output.push_str(&format!("Items seen: {items_seen}\n"));
+    }
+    if let Some(items_new) = attempt.items_new {
+        output.push_str(&format!("Items new: {items_new}\n"));
+    }
+
+    if let Some(diagnostic) = &attempt.diagnostic {
+        output.push_str(&format!("Phase: {}\n", diagnostic.phase.label()));
+        output.push_str(&format!("Kind: {}\n", diagnostic.kind.label()));
+        output.push_str(&format!("Summary: {}\n", diagnostic.summary));
+        if let Some(detail) = diagnostic.detail.as_deref() {
+            output.push_str(&format!("Detail: {detail}\n"));
+        }
+    }
+
+    output
 }
 
 fn print_enrichment_queue(jobs: &[db::EnrichmentJobWithContext]) {
@@ -895,9 +998,17 @@ fn seed_demo_data(db: &db::Db) -> Result<()> {
     db.add_health_log(feed_ids[0], FeedStatus::Healthy, None)?;
     db.add_health_log(feed_ids[1], FeedStatus::Healthy, None)?;
     db.add_health_log(feed_ids[2], FeedStatus::Healthy, None)?;
-    db.add_health_log(feed_ids[3], FeedStatus::Warning, Some("RSS parse warning: unexpected element"))?;
+    db.add_health_log(
+        feed_ids[3],
+        FeedStatus::Warning,
+        Some("RSS parse warning: unexpected element"),
+    )?;
     db.add_health_log(feed_ids[4], FeedStatus::Healthy, None)?;
-    db.add_health_log(feed_ids[5], FeedStatus::Disabled, Some("Feed disabled: Tor proxy unreachable"))?;
+    db.add_health_log(
+        feed_ids[5],
+        FeedStatus::Disabled,
+        Some("Feed disabled: Tor proxy unreachable"),
+    )?;
 
     Ok(())
 }
@@ -949,10 +1060,13 @@ fn run_app(
 #[cfg(test)]
 mod tests {
     use super::{
-        cisa_kev_cache_path, csv_escape, format_extracted_indicators, format_ioc_detail,
-        format_ioc_export_csv, truncate_display,
+        cisa_kev_cache_path, csv_escape, format_extracted_indicators,
+        format_feed_diagnostic_report, format_ioc_detail, format_ioc_export_csv, truncate_display,
     };
     use crate::db::{IndicatorDetail, IndicatorOccurrence, IndicatorRecord};
+    use crate::feed::diagnostics::{
+        FetchAttempt, FetchDiagnostic, FetchFailureKind, FetchFailurePhase,
+    };
     use chrono::Utc;
     use sentinel_ioc::IndicatorType;
     use sentinel_ioc::{ExtractionField, ExtractionInput};
@@ -1070,6 +1184,41 @@ mod tests {
 
         assert!(output.starts_with("id,type,value,normalized_value"));
         assert!(output.contains("1,Domain,Bad.Example.NET,bad.example.net,Unknown,3"));
+    }
+
+    #[test]
+    fn format_feed_diagnostic_report_includes_failure_context() {
+        let attempt = FetchAttempt {
+            id: None,
+            feed_id: Some(7),
+            attempted_at: Some(Utc::now()),
+            success: false,
+            url: "https://example.test/feed.xml".into(),
+            final_url: None,
+            http_status: Some(404),
+            elapsed_ms: 12,
+            diagnostic: Some(FetchDiagnostic {
+                phase: FetchFailurePhase::HttpStatus,
+                kind: FetchFailureKind::HttpStatusClientError,
+                summary: "Feed returned HTTP 404".into(),
+                detail: Some("status code: 404".into()),
+                http_status: Some(404),
+                url: "https://example.test/feed.xml".into(),
+                final_url: None,
+                elapsed_ms: 12,
+            }),
+            items_seen: None,
+            items_new: None,
+        };
+
+        let output = format_feed_diagnostic_report(Some("Example"), &attempt);
+
+        assert!(output.contains("Feed: Example"));
+        assert!(output.contains("Result: failed"));
+        assert!(output.contains("HTTP status: 404"));
+        assert!(output.contains("Phase: HTTP status"));
+        assert!(output.contains("Kind: HTTP client error"));
+        assert!(output.contains("Summary: Feed returned HTTP 404"));
     }
 
     #[test]
