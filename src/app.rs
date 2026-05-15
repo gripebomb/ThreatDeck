@@ -830,8 +830,9 @@ impl App {
             .api_template_id
             .and_then(|id| self.db.get_template(id).ok().flatten());
 
-        match crate::feed::FeedManager::fetch_feed(&feed, template) {
-            Ok(result) => {
+        let outcome = crate::feed::FeedManager::run_fetch_attempt(&feed, template);
+        match outcome.result {
+            Some(result) => {
                 let item_count = result.items.len();
                 let keywords = self.db.list_keywords(true).unwrap_or_default();
                 match crate::alert::AlertEngine::process_feed_result_with_config(
@@ -842,10 +843,9 @@ impl App {
                     &self.config,
                 ) {
                     Ok(alerts) => {
-                        let _ = self.db.update_feed_health(
+                        let _ = self.db.record_feed_fetch_outcome(
                             feed.id,
-                            true,
-                            None,
+                            &outcome.attempt,
                             Some(result.content_hash.as_str()),
                         );
                         let _ = self.db.add_health_log(feed.id, FeedStatus::Healthy, None);
@@ -868,6 +868,19 @@ impl App {
                         );
                     }
                     Err(e) => {
+                        let mut attempt = outcome.attempt.clone();
+                        attempt.success = false;
+                        attempt.diagnostic = Some(crate::feed::diagnostics::FetchDiagnostic {
+                            phase: crate::feed::diagnostics::FetchFailurePhase::DatabaseWrite,
+                            kind: crate::feed::diagnostics::FetchFailureKind::DatabaseError,
+                            summary: "Feed result could not be stored".to_string(),
+                            detail: Some(e.to_string()),
+                            http_status: attempt.http_status,
+                            url: attempt.url.clone(),
+                            final_url: attempt.final_url.clone(),
+                            elapsed_ms: attempt.elapsed_ms,
+                        });
+                        let _ = self.db.record_feed_fetch_outcome(feed.id, &attempt, None);
                         self.set_notification(
                             format!("Feed processed but storing alerts/items failed: {}", e),
                             NotificationType::Error,
@@ -875,14 +888,19 @@ impl App {
                     }
                 }
             }
-            Err(e) => {
-                let message = e.to_string();
+            None => {
+                let message = outcome
+                    .attempt
+                    .diagnostic
+                    .as_ref()
+                    .map(|diagnostic| diagnostic.summary.as_str())
+                    .unwrap_or("Fetch failed");
                 let _ = self
                     .db
-                    .update_feed_health(feed.id, false, Some(message.as_str()), None);
+                    .record_feed_fetch_outcome(feed.id, &outcome.attempt, None);
                 let _ = self
                     .db
-                    .add_health_log(feed.id, FeedStatus::Error, Some(message.as_str()));
+                    .add_health_log(feed.id, FeedStatus::Error, Some(message));
                 let _ = self
                     .db
                     .prune_health_logs(feed.id, self.config.max_health_log_entries);
