@@ -1,4 +1,5 @@
 use crate::app::{App, InputMode};
+use crate::feed::diagnostics::FetchAttempt;
 use crate::types::FeedType;
 use crate::ui::list::{motion_from_key, move_selection, selected_style};
 use crossterm::event::{KeyCode, KeyEvent};
@@ -40,7 +41,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         "Interval",
         "Last Fetch",
         "Fails",
-        "Tags",
+        "Last Error",
     ])
     .style(
         Style::default()
@@ -68,12 +69,6 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 crate::types::FeedStatus::Error => "● Error  ",
                 crate::types::FeedStatus::Disabled => "○ Disabled",
             };
-            let tag_str = ft
-                .tags
-                .iter()
-                .map(|t| t.name.clone())
-                .collect::<Vec<_>>()
-                .join(", ");
             let last_fetch = ft
                 .feed
                 .last_fetch_at
@@ -86,7 +81,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
                 Cell::from(format!("{}s", ft.feed.interval_secs)),
                 Cell::from(last_fetch),
                 Cell::from(format!("{}", ft.feed.consecutive_failures)),
-                Cell::from(tag_str),
+                Cell::from(ft.feed.last_error.as_deref().unwrap_or("")),
             ])
             .style(style)
         })
@@ -101,7 +96,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             Constraint::Length(10),
             Constraint::Length(16),
             Constraint::Length(6),
-            Constraint::Min(15),
+            Constraint::Min(20),
         ],
     )
     .header(header)
@@ -152,9 +147,22 @@ fn draw_detail(f: &mut Frame, app: &App) {
         .collect::<Vec<_>>()
         .join(", ");
     let block = Block::default()
-        .title("Feed Detail - Esc to close")
+        .title("Fetch Diagnostics - Esc to close")
         .borders(Borders::ALL)
         .border_style(Style::default().fg(app.theme.primary));
+    let latest_attempt = app.feeds_selected_attempts.first();
+    let recent_attempts = if app.feeds_selected_attempts.is_empty() {
+        "  none".to_string()
+    } else {
+        app.feeds_selected_attempts
+            .iter()
+            .map(format_attempt_line)
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let last_attempt = latest_attempt
+        .map(format_attempt_detail)
+        .unwrap_or_else(|| "Last attempt:\n  none".to_string());
     let text = [
         format!("Name: {}", feed.feed.name),
         format!("URL: {}", feed.feed.url),
@@ -163,16 +171,14 @@ fn draw_detail(f: &mut Frame, app: &App) {
         format!("Interval: {}s", feed.feed.interval_secs),
         format!("Status: {}", feed.status.label()),
         format!("Failures: {}", feed.feed.consecutive_failures),
+        format!("Last fetch: {}", format_optional_ts(feed.feed.last_fetch_at)),
         format!(
-            "Last fetch: {}",
-            feed.feed
-                .last_fetch_at
-                .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-                .unwrap_or_else(|| "Never".into())
+            "Last success: {}",
+            format_optional_ts(feed.feed.last_fetch_success_at)
         ),
         format!(
-            "Last error: {}",
-            feed.feed.last_error.as_deref().unwrap_or("none")
+            "Last failure: {}",
+            format_optional_ts(feed.feed.last_fetch_failed_at)
         ),
         format!(
             "Content hash: {}",
@@ -182,6 +188,11 @@ fn draw_detail(f: &mut Frame, app: &App) {
             "Tags: {}",
             if tags.is_empty() { "none".into() } else { tags }
         ),
+        String::new(),
+        last_attempt,
+        String::new(),
+        "Recent attempts:".to_string(),
+        recent_attempts,
     ]
     .join("\n");
     let para = Paragraph::new(text)
@@ -189,6 +200,55 @@ fn draw_detail(f: &mut Frame, app: &App) {
         .style(Style::default().fg(app.theme.fg).bg(app.theme.surface))
         .wrap(ratatui::widgets::Wrap { trim: false });
     f.render_widget(para, detail_area);
+}
+
+fn format_optional_ts(ts: Option<chrono::DateTime<chrono::Utc>>) -> String {
+    ts.map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+        .unwrap_or_else(|| "Never".into())
+}
+
+fn format_attempt_detail(attempt: &FetchAttempt) -> String {
+    let result = if attempt.success { "ok" } else { "failed" };
+    let http_status = attempt
+        .http_status
+        .map(|status| status.to_string())
+        .unwrap_or_else(|| "n/a".into());
+    let (phase, kind, error, detail) = if let Some(diagnostic) = &attempt.diagnostic {
+        (
+            diagnostic.phase.label().to_string(),
+            diagnostic.kind.label().to_string(),
+            diagnostic.summary.clone(),
+            diagnostic.detail.clone().unwrap_or_else(|| "none".into()),
+        )
+    } else {
+        ("n/a".into(), "n/a".into(), "none".into(), "none".into())
+    };
+
+    format!(
+        "Last attempt:\n  Result: {result}\n  Phase: {phase}\n  Kind: {kind}\n  HTTP status: {http_status}\n  Elapsed: {}ms\n\nError:\n  {error}\n\nDetail:\n  {detail}",
+        attempt.elapsed_ms
+    )
+}
+
+fn format_attempt_line(attempt: &FetchAttempt) -> String {
+    let time = attempt
+        .attempted_at
+        .map(|dt| dt.format("%H:%M").to_string())
+        .unwrap_or_else(|| "--:--".into());
+    if attempt.success {
+        format!(
+            "  {time} ok      {} items, {} new",
+            attempt.items_seen.unwrap_or(0),
+            attempt.items_new.unwrap_or(0)
+        )
+    } else {
+        let summary = attempt
+            .diagnostic
+            .as_ref()
+            .map(|diagnostic| diagnostic.summary.as_str())
+            .unwrap_or("Fetch failed");
+        format!("  {time} failed  {summary}")
+    }
 }
 
 fn draw_form(f: &mut Frame, app: &App) {
@@ -399,6 +459,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
 
     if let Some(motion) = motion_from_key(key, &mut app.pending_g) {
         app.feeds_selected = move_selection(app.feeds_selected, app.feeds_list.len(), motion);
+        app.refresh_selected_feed_attempts();
         return;
     }
 
@@ -450,6 +511,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
             }
         }
         KeyCode::Enter => {
+            app.refresh_selected_feed_attempts();
             app.feeds_detail_view = true;
         }
         KeyCode::Char(' ') => {

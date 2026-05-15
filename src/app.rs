@@ -52,6 +52,7 @@ pub struct App {
     pub feeds_form_edit_id: Option<i64>,
     pub feeds_detail_view: bool,
     pub feeds_sort: usize,
+    pub feeds_selected_attempts: Vec<crate::feed::diagnostics::FetchAttempt>,
 
     // Alerts
     pub alerts_list: Vec<AlertWithMeta>,
@@ -172,6 +173,7 @@ impl App {
             feeds_form_edit_id: None,
             feeds_detail_view: false,
             feeds_sort: 0,
+            feeds_selected_attempts: Vec::new(),
             alerts_list: Vec::new(),
             alerts_selected: 0,
             alerts_filter: String::new(),
@@ -753,6 +755,17 @@ impl App {
         }
         if self.feeds_selected >= self.feeds_list.len() && !self.feeds_list.is_empty() {
             self.feeds_selected = self.feeds_list.len() - 1;
+        }
+        self.refresh_selected_feed_attempts();
+    }
+
+    pub fn refresh_selected_feed_attempts(&mut self) {
+        self.feeds_selected_attempts.clear();
+        if let Some(feed) = self.feeds_list.get(self.feeds_selected) {
+            self.feeds_selected_attempts = self
+                .db
+                .list_feed_fetch_attempts(feed.feed.id, 5)
+                .unwrap_or_default();
         }
     }
 
