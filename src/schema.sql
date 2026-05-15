@@ -7,6 +7,11 @@ CREATE TABLE IF NOT EXISTS feeds (
     interval_secs INTEGER NOT NULL DEFAULT 300,
     last_fetch_at TIMESTAMP,
     last_error TEXT,
+    last_fetch_success_at TIMESTAMP,
+    last_fetch_failed_at TIMESTAMP,
+    last_failure_phase TEXT,
+    last_failure_kind TEXT,
+    last_http_status INTEGER,
     consecutive_failures INTEGER NOT NULL DEFAULT 0,
     content_hash TEXT,
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -246,6 +251,26 @@ CREATE TABLE IF NOT EXISTS feed_health_logs (
     FOREIGN KEY (feed_id) REFERENCES feeds(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_health_logs_feed ON feed_health_logs(feed_id, checked_at);
+
+CREATE TABLE IF NOT EXISTS feed_fetch_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    feed_id INTEGER NOT NULL,
+    attempted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    success INTEGER NOT NULL,
+    url TEXT NOT NULL,
+    final_url TEXT,
+    http_status INTEGER,
+    elapsed_ms INTEGER NOT NULL,
+    failure_phase TEXT,
+    failure_kind TEXT,
+    error_summary TEXT,
+    error_detail TEXT,
+    items_seen INTEGER,
+    items_new INTEGER,
+    FOREIGN KEY(feed_id) REFERENCES feeds(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_feed_fetch_attempts_feed
+    ON feed_fetch_attempts(feed_id, attempted_at DESC);
 
 CREATE TABLE IF NOT EXISTS alert_triage_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

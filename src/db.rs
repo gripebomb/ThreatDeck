@@ -221,6 +221,47 @@ impl Db {
         let _ = self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_triage_events_alert ON alert_triage_events(alert_id, created_at)", [],
         );
+        // Idempotent feed fetch diagnostics migration (v2026-05-15)
+        let _ = self
+            .conn
+            .execute("ALTER TABLE feeds ADD COLUMN last_fetch_success_at TIMESTAMP", []);
+        let _ = self
+            .conn
+            .execute("ALTER TABLE feeds ADD COLUMN last_fetch_failed_at TIMESTAMP", []);
+        let _ = self
+            .conn
+            .execute("ALTER TABLE feeds ADD COLUMN last_failure_phase TEXT", []);
+        let _ = self
+            .conn
+            .execute("ALTER TABLE feeds ADD COLUMN last_failure_kind TEXT", []);
+        let _ = self
+            .conn
+            .execute("ALTER TABLE feeds ADD COLUMN last_http_status INTEGER", []);
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS feed_fetch_attempts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                feed_id INTEGER NOT NULL,
+                attempted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                success INTEGER NOT NULL,
+                url TEXT NOT NULL,
+                final_url TEXT,
+                http_status INTEGER,
+                elapsed_ms INTEGER NOT NULL,
+                failure_phase TEXT,
+                failure_kind TEXT,
+                error_summary TEXT,
+                error_detail TEXT,
+                items_seen INTEGER,
+                items_new INTEGER,
+                FOREIGN KEY(feed_id) REFERENCES feeds(id) ON DELETE CASCADE
+            )",
+            [],
+        )?;
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_feed_fetch_attempts_feed
+             ON feed_fetch_attempts(feed_id, attempted_at DESC)",
+            [],
+        )?;
         Ok(())
     }
 
@@ -295,7 +336,9 @@ impl Db {
     pub fn get_feed(&self, id: i64) -> Result<Option<Feed>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, name, url, feed_type, enabled, interval_secs, last_fetch_at, last_error,
-                    consecutive_failures, content_hash, created_at, api_template_id, api_key, custom_headers, tor_proxy
+                    last_fetch_success_at, last_fetch_failed_at, last_failure_phase, last_failure_kind,
+                    last_http_status, consecutive_failures, content_hash, created_at, api_template_id,
+                    api_key, custom_headers, tor_proxy
              FROM feeds WHERE id = ?1"
         )?;
         stmt.query_row([id], Self::row_to_feed)
@@ -307,11 +350,15 @@ impl Db {
         let has_filter = filter.map(|f| !f.is_empty()).unwrap_or(false);
         let sql = if has_filter {
             "SELECT id, name, url, feed_type, enabled, interval_secs, last_fetch_at, last_error,
-                    consecutive_failures, content_hash, created_at, api_template_id, api_key, custom_headers, tor_proxy
+                    last_fetch_success_at, last_fetch_failed_at, last_failure_phase, last_failure_kind,
+                    last_http_status, consecutive_failures, content_hash, created_at, api_template_id,
+                    api_key, custom_headers, tor_proxy
              FROM feeds WHERE name LIKE ?1 OR url LIKE ?1 ORDER BY id"
         } else {
             "SELECT id, name, url, feed_type, enabled, interval_secs, last_fetch_at, last_error,
-                    consecutive_failures, content_hash, created_at, api_template_id, api_key, custom_headers, tor_proxy
+                    last_fetch_success_at, last_fetch_failed_at, last_failure_phase, last_failure_kind,
+                    last_http_status, consecutive_failures, content_hash, created_at, api_template_id,
+                    api_key, custom_headers, tor_proxy
              FROM feeds ORDER BY id"
         };
         let mut stmt = self.conn.prepare(sql)?;
@@ -395,7 +442,9 @@ impl Db {
     fn row_to_feed(row: &rusqlite::Row) -> rusqlite::Result<Feed> {
         let feed_type_str: String = row.get(3)?;
         let last_fetch: Option<String> = row.get(6)?;
-        let created: String = row.get(10)?;
+        let last_success: Option<String> = row.get(8)?;
+        let last_failed: Option<String> = row.get(9)?;
+        let created: String = row.get(15)?;
         Ok(Feed {
             id: row.get(0)?,
             name: row.get(1)?,
@@ -405,13 +454,18 @@ impl Db {
             interval_secs: row.get::<_, i64>(5)? as u64,
             last_fetch_at: last_fetch.and_then(|s| parse_ts(&s)),
             last_error: row.get(7)?,
-            consecutive_failures: row.get::<_, i64>(8)? as u32,
-            content_hash: row.get(9)?,
+            last_fetch_success_at: last_success.and_then(|s| parse_ts(&s)),
+            last_fetch_failed_at: last_failed.and_then(|s| parse_ts(&s)),
+            last_failure_phase: row.get(10)?,
+            last_failure_kind: row.get(11)?,
+            last_http_status: row.get::<_, Option<i64>>(12)?.map(|status| status as u16),
+            consecutive_failures: row.get::<_, i64>(13)? as u32,
+            content_hash: row.get(14)?,
             created_at: parse_ts(&created).unwrap_or_else(Utc::now),
-            api_template_id: row.get(11)?,
-            api_key: row.get(12)?,
-            custom_headers: row.get(13)?,
-            tor_proxy: row.get(14)?,
+            api_template_id: row.get(16)?,
+            api_key: row.get(17)?,
+            custom_headers: row.get(18)?,
+            tor_proxy: row.get(19)?,
         })
     }
 
@@ -2355,6 +2409,32 @@ mod tests {
         Db {
             conn: Connection::open_in_memory().unwrap(),
         }
+    }
+
+    #[test]
+    fn feed_summary_includes_fetch_diagnostic_fields() {
+        let db = Db::new_in_memory_for_tests();
+        db.init_schema().unwrap();
+        let feed_id = db
+            .create_feed(&FeedCreate {
+                name: "Example".into(),
+                url: "https://example.test/feed.xml".into(),
+                feed_type: FeedType::Rss,
+                enabled: true,
+                interval_secs: 300,
+                api_template_id: None,
+                api_key: None,
+                custom_headers: None,
+                tor_proxy: None,
+            })
+            .unwrap();
+
+        let feed = db.get_feed(feed_id).unwrap().unwrap();
+        assert!(feed.last_fetch_success_at.is_none());
+        assert!(feed.last_fetch_failed_at.is_none());
+        assert!(feed.last_failure_phase.is_none());
+        assert!(feed.last_failure_kind.is_none());
+        assert!(feed.last_http_status.is_none());
     }
 
     #[test]
