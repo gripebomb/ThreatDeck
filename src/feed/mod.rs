@@ -1,4 +1,5 @@
 pub mod api;
+pub mod diagnostics;
 pub mod onion;
 pub mod rss;
 pub mod utils;
