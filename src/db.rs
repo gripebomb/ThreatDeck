@@ -668,6 +668,53 @@ impl Db {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    pub fn record_feed_fetch_outcome(
+        &self,
+        feed_id: i64,
+        attempt: &crate::feed::diagnostics::FetchAttempt,
+        content_hash: Option<&str>,
+    ) -> Result<i64> {
+        let attempt_id = self.record_feed_fetch_attempt(feed_id, attempt)?;
+        let diagnostic = attempt.diagnostic.as_ref();
+
+        if attempt.success {
+            self.conn.execute(
+                "UPDATE feeds SET
+                    consecutive_failures = 0,
+                    last_error = NULL,
+                    last_failure_phase = NULL,
+                    last_failure_kind = NULL,
+                    last_http_status = NULL,
+                    content_hash = ?1,
+                    last_fetch_at = CURRENT_TIMESTAMP,
+                    last_fetch_success_at = CURRENT_TIMESTAMP
+                 WHERE id = ?2",
+                params![content_hash, feed_id],
+            )?;
+        } else {
+            self.conn.execute(
+                "UPDATE feeds SET
+                    consecutive_failures = consecutive_failures + 1,
+                    last_error = ?1,
+                    last_failure_phase = ?2,
+                    last_failure_kind = ?3,
+                    last_http_status = ?4,
+                    last_fetch_at = CURRENT_TIMESTAMP,
+                    last_fetch_failed_at = CURRENT_TIMESTAMP
+                 WHERE id = ?5",
+                params![
+                    diagnostic.map(|d| d.summary.as_str()),
+                    diagnostic.map(|d| d.phase.label()),
+                    diagnostic.map(|d| d.kind.label()),
+                    attempt.http_status.map(|status| status as i64),
+                    feed_id,
+                ],
+            )?;
+        }
+
+        Ok(attempt_id)
+    }
+
     fn row_to_fetch_attempt(
         row: &rusqlite::Row,
     ) -> rusqlite::Result<crate::feed::diagnostics::FetchAttempt> {
@@ -2506,6 +2553,21 @@ mod tests {
         }
     }
 
+    fn create_diagnostic_test_feed(db: &Db) -> i64 {
+        db.create_feed(&FeedCreate {
+            name: "Example".into(),
+            url: "https://example.test/feed.xml".into(),
+            feed_type: FeedType::Rss,
+            enabled: true,
+            interval_secs: 300,
+            api_template_id: None,
+            api_key: None,
+            custom_headers: None,
+            tor_proxy: None,
+        })
+        .unwrap()
+    }
+
     #[test]
     fn feed_summary_includes_fetch_diagnostic_fields() {
         let db = Db::new_in_memory_for_tests();
@@ -2536,19 +2598,7 @@ mod tests {
     fn records_fetch_attempts_newest_first() {
         let db = Db::new_in_memory_for_tests();
         db.init_schema().unwrap();
-        let feed_id = db
-            .create_feed(&FeedCreate {
-                name: "Example".into(),
-                url: "https://example.test/feed.xml".into(),
-                feed_type: FeedType::Rss,
-                enabled: true,
-                interval_secs: 300,
-                api_template_id: None,
-                api_key: None,
-                custom_headers: None,
-                tor_proxy: None,
-            })
-            .unwrap();
+        let feed_id = create_diagnostic_test_feed(&db);
 
         let failed = crate::feed::diagnostics::FetchAttempt {
             id: None,
@@ -2578,6 +2628,71 @@ mod tests {
             attempts[0].diagnostic.as_ref().unwrap().summary,
             "Feed returned HTTP 404"
         );
+    }
+
+    #[test]
+    fn successful_attempt_resets_feed_failure_summary() {
+        let db = Db::new_in_memory_for_tests();
+        db.init_schema().unwrap();
+        let feed_id = create_diagnostic_test_feed(&db);
+
+        let attempt = crate::feed::diagnostics::FetchAttempt {
+            id: None,
+            feed_id: Some(feed_id),
+            attempted_at: None,
+            success: true,
+            url: "https://example.test/feed.xml".into(),
+            final_url: None,
+            http_status: Some(200),
+            elapsed_ms: 12,
+            diagnostic: None,
+            items_seen: Some(3),
+            items_new: Some(2),
+        };
+        db.record_feed_fetch_outcome(feed_id, &attempt, Some("abc123"))
+            .unwrap();
+
+        let feed = db.get_feed(feed_id).unwrap().unwrap();
+        assert_eq!(feed.consecutive_failures, 0);
+        assert!(feed.last_error.is_none());
+        assert!(feed.last_fetch_success_at.is_some());
+        assert!(feed.last_fetch_failed_at.is_none());
+        assert_eq!(feed.content_hash.as_deref(), Some("abc123"));
+    }
+
+    #[test]
+    fn failed_attempt_updates_feed_failure_summary() {
+        let db = Db::new_in_memory_for_tests();
+        db.init_schema().unwrap();
+        let feed_id = create_diagnostic_test_feed(&db);
+
+        let attempt = crate::feed::diagnostics::FetchAttempt {
+            id: None,
+            feed_id: Some(feed_id),
+            attempted_at: None,
+            success: false,
+            url: "https://example.test/feed.xml".into(),
+            final_url: None,
+            http_status: Some(404),
+            elapsed_ms: 25,
+            diagnostic: Some(crate::feed::diagnostics::classify_http_status(
+                "https://example.test/feed.xml",
+                404,
+                25,
+            )),
+            items_seen: None,
+            items_new: None,
+        };
+        db.record_feed_fetch_outcome(feed_id, &attempt, None)
+            .unwrap();
+
+        let feed = db.get_feed(feed_id).unwrap().unwrap();
+        assert_eq!(feed.consecutive_failures, 1);
+        assert_eq!(feed.last_error.as_deref(), Some("Feed returned HTTP 404"));
+        assert_eq!(feed.last_failure_phase.as_deref(), Some("HTTP status"));
+        assert_eq!(feed.last_failure_kind.as_deref(), Some("HTTP client error"));
+        assert_eq!(feed.last_http_status, Some(404));
+        assert!(feed.last_fetch_failed_at.is_some());
     }
 
     #[test]
