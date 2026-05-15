@@ -109,9 +109,10 @@ impl AutoFetcher {
                         None => None,
                     };
 
-                    match FeedManager::fetch_feed(feed, template) {
-                        Ok(result) => {
-                            let _ = db.update_feed_health(feed.id, true, None, Some(result.content_hash.as_str()));
+                    let outcome = FeedManager::run_fetch_attempt(feed, template);
+                    match outcome.result {
+                        Some(result) => {
+                            let _ = db.record_feed_fetch_outcome(feed.id, &outcome.attempt, Some(result.content_hash.as_str()));
                             feeds_succeeded += 1;
                             match AlertEngine::process_feed_result(&db, feed, &result, &keywords,
                             ) {
@@ -123,9 +124,15 @@ impl AutoFetcher {
                                 }
                             }
                         }
-                        Err(e) => {
-                            let _ = db.update_feed_health(feed.id, false, Some(&e.to_string()), None);
-                            push_error(&mut errors, format!("Feed '{}' fetch failed: {}", feed.name, e));
+                        None => {
+                            let summary = outcome
+                                .attempt
+                                .diagnostic
+                                .as_ref()
+                                .map(|diagnostic| diagnostic.summary.as_str())
+                                .unwrap_or("Fetch failed");
+                            let _ = db.record_feed_fetch_outcome(feed.id, &outcome.attempt, None);
+                            push_error(&mut errors, format!("Feed '{}' fetch failed: {}", feed.name, summary));
                         }
                     }
                 }
