@@ -1,6 +1,6 @@
 [package]
 name = "sentinel-ioc"
-version = "0.4.0"
+version = "0.1.0"
 edition = "2021"
 description = "Pure IOC extraction and normalization logic for ThreatDeck"
 license = "MIT"
