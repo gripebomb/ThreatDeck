@@ -20,7 +20,7 @@ The `IndicatorType` enum also includes reserved variants for future extractor su
 
 ```toml
 [dependencies]
-sentinel-ioc = "0.1.0"
+sentinel-ioc = "0.4.0"
 ```
 
 ## Example

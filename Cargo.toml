@@ -1,6 +1,6 @@
 [package]
 name = "ThreatDeck"
-version = "0.3.3"
+version = "0.4.0"
 edition = "2021"
 description = "Terminal-based threat intelligence monitoring and alerting platform"
 license = "MIT"
@@ -47,8 +47,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "time", "sync"] }
 scraper = "0.22"
 atom_syndication = "0.12"
 rss = "2"
-sentinel-enrichment = { version = "0.1.1", path = "crates/sentinel-enrichment" }
-sentinel-ioc = { version = "0.1.0", path = "crates/sentinel-ioc" }
+sentinel-enrichment = { version = "0.4.0", path = "crates/sentinel-enrichment" }
+sentinel-ioc = { version = "0.4.0", path = "crates/sentinel-ioc" }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
