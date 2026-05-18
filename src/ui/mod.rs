@@ -1,5 +1,6 @@
 pub mod alerts;
 pub mod articles;
+pub mod command_palette;
 pub mod dashboard;
 pub mod enrichment_queue;
 pub mod feeds;
@@ -80,6 +81,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     if app.tags_assignment_mode {
         draw_tag_assignment(f, app);
+    }
+
+    if app.command_palette.state.is_open {
+        command_palette::render::draw(f, app);
     }
 
     // Draw help overlay

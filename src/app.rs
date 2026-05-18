@@ -1,4 +1,4 @@
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
@@ -7,6 +7,9 @@ use crate::config::{AppConfig, Paths};
 use crate::db::{
     AlertFilter, Db, EnrichmentJobWithContext, EnrichmentProviderRecord, IndicatorRecord,
     IndicatorSearch,
+};
+use crate::ui::command_palette::{
+    CommandPalette, CommandId, CommandAction, ModalKind, AppAction,
 };
 use crate::theme::{get_runtime_theme, Theme};
 use crate::types::*;
@@ -134,11 +137,11 @@ pub struct App {
     pub settings_notif_form_edit_id: Option<i64>,
     pub settings_cleanup_preview: Option<u64>,
 
-    // Auto-fetch
     pub auto_fetcher: Option<AutoFetcher>,
     pub auto_fetch_rx: Option<mpsc::Receiver<AutoFetchMessage>>,
     pub settings_auto_fetch_enabled: bool,
     pub settings_auto_fetch_interval: u32,
+    pub command_palette: CommandPalette,
 }
 
 impl App {
@@ -242,6 +245,7 @@ impl App {
             auto_fetch_rx: None,
             settings_auto_fetch_enabled: false,
             settings_auto_fetch_interval: 30,
+            command_palette: CommandPalette::new(),
         };
         app.refresh_dashboard();
         app.refresh_feeds();
@@ -358,6 +362,11 @@ impl App {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) {
+        if self.command_palette.state.is_open {
+            self.handle_palette_key(key);
+            return;
+        }
+
         if self.show_help {
             if key.code == KeyCode::Esc
                 || key.code == KeyCode::Char('?')
@@ -387,18 +396,15 @@ impl App {
             return;
         }
 
-        // When in Typing mode, all keystrokes go to the active form (except Esc to exit Typing mode)
         if self.input_mode == InputMode::Typing {
             if key.code == KeyCode::Esc {
                 self.input_mode = InputMode::Normal;
                 return;
             }
-            // Delegate to the screen-specific form handler
             self.handle_screen_key(key);
             return;
         }
 
-        // Normal mode global shortcuts
         match key.code {
             KeyCode::Char('q') if !self.in_form() => self.running = false,
             KeyCode::Char('1') => self.switch_screen(Screen::Dashboard),
@@ -413,9 +419,274 @@ impl App {
             KeyCode::Char('0') => self.switch_screen(Screen::Settings),
             KeyCode::Char('?') | KeyCode::F(1) => self.show_help = true,
             KeyCode::Char('/') => self.start_filter(),
+            KeyCode::Char(':') => self.command_palette.state.open_colon(),
+            KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.command_palette.state.open_fuzzy();
+            }
             KeyCode::Esc => self.handle_esc(),
             _ => self.handle_screen_key(key),
         }
+    }
+
+    fn handle_palette_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc => {
+                self.command_palette.state.close();
+            }
+            KeyCode::Enter => {
+                if let Some(cmd) = self.command_palette.state.selected_command() {
+                    let cmd_id = cmd.id;
+                    let action = cmd.action;
+                    self.command_palette.state.close();
+                    self.execute_command(cmd_id, action);
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.command_palette.state.move_up();
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.command_palette.state.move_down();
+            }
+            KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.command_palette.state.move_up();
+            }
+            KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.command_palette.state.move_down();
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.command_palette.state.clear_input();
+            }
+            KeyCode::Backspace => {
+                self.command_palette.state.backspace();
+            }
+            KeyCode::Char(c) => {
+                self.command_palette.state.input_char(c);
+            }
+            _ => {}
+        }
+    }
+
+    fn execute_command(
+        &mut self,
+        _cmd_id: CommandId,
+        action: CommandAction,
+    ) {
+        match action {
+            CommandAction::Navigate(screen) => {
+                self.switch_screen(screen);
+                self.set_notification(format!("Opened {}", screen), crate::types::NotificationType::Info);
+            }
+            CommandAction::OpenModal(modal) => {
+                if modal == ModalKind::Help {
+                    self.show_help = true;
+                }
+            }
+            CommandAction::Dispatch(app_action) => {
+                self.handle_app_action(app_action);
+            }
+            CommandAction::Quit => {
+                self.running = false;
+            }
+        }
+    }
+
+    fn handle_app_action(&mut self, action: AppAction) {
+
+        match action {
+            AppAction::Refresh => {
+                match self.screen {
+                    Screen::Dashboard => self.refresh_dashboard(),
+                    Screen::Feeds => self.refresh_feeds(),
+                    Screen::Alerts => self.refresh_alerts(),
+                    Screen::Articles => self.refresh_articles(),
+                    Screen::Indicators => self.refresh_indicators(),
+                    Screen::EnrichmentQueue => self.refresh_enrichment_queue(),
+                    Screen::Keywords => self.refresh_keywords(),
+                    Screen::Tags => self.refresh_tags(),
+                    Screen::Logs => self.refresh_logs(),
+                    Screen::Settings => self.refresh_settings(),
+                }
+                self.set_notification("Refreshed".to_string(), crate::types::NotificationType::Success);
+            }
+            AppAction::FeedAdd => {
+                self.open_feed_add_form();
+            }
+            AppAction::FeedEditSelected => {
+                if let Some(ft) = self.feeds_list.get(self.feeds_selected) {
+                    let f = &ft.feed;
+                    self.feeds_form = crate::types::FeedForm {
+                        name: f.name.clone(),
+                        url: f.url.clone(),
+                        feed_type: f.feed_type,
+                        interval_secs: f.interval_secs,
+                        enabled: f.enabled,
+                        api_template_id: f.api_template_id,
+                        api_key: f.api_key.clone().unwrap_or_default(),
+                        custom_headers: f.custom_headers.clone().unwrap_or_default(),
+                        tor_proxy: f.tor_proxy.clone().unwrap_or_default(),
+                    };
+                    self.feeds_form_edit_id = Some(f.id);
+                    self.feeds_show_form = true;
+                    self.form_focus = 0;
+                    self.input_mode = InputMode::Normal;
+                    self.set_notification("Edit feed form opened".to_string(), crate::types::NotificationType::Info);
+                } else {
+                    self.set_notification("No feed selected".to_string(), crate::types::NotificationType::Warning);
+                }
+            }
+            AppAction::FeedCheckSelected => {
+                if self.feeds_list.is_empty() {
+                    self.set_notification("No feed selected".to_string(), crate::types::NotificationType::Warning);
+                } else {
+                    self.fetch_selected_feed();
+                }
+            }
+            AppAction::FeedCheckAll => {
+                self.set_notification("Checking all enabled feeds...".to_string(), crate::types::NotificationType::Info);
+            }
+            AppAction::FeedEnableSelected => {
+                if let Some(feed_id) = self.feeds_list.get(self.feeds_selected).map(|ft| ft.feed.id) {
+                    let _ = self.db.toggle_feed_enabled(feed_id);
+                    self.refresh_feeds();
+                    if let Some(ft) = self.feeds_list.get(self.feeds_selected) {
+                        self.set_notification(format!("Feed '{}' enabled", ft.feed.name), crate::types::NotificationType::Success);
+                    }
+                } else {
+                    self.set_notification("No feed selected".to_string(), crate::types::NotificationType::Warning);
+                }
+            }
+            AppAction::FeedDisableSelected => {
+                if let Some(feed_id) = self.feeds_list.get(self.feeds_selected).map(|ft| ft.feed.id) {
+                    let _ = self.db.toggle_feed_enabled(feed_id);
+                    self.refresh_feeds();
+                    if let Some(ft) = self.feeds_list.get(self.feeds_selected) {
+                        self.set_notification(format!("Feed '{}' disabled", ft.feed.name), crate::types::NotificationType::Success);
+                    }
+                } else {
+                    self.set_notification("No feed selected".to_string(), crate::types::NotificationType::Warning);
+                }
+            }
+            AppAction::AlertShowUnread => {
+                self.alerts_filter_unread_only = true;
+                self.refresh_alerts();
+                self.switch_screen(Screen::Alerts);
+                self.set_notification("Showing unread alerts".to_string(), crate::types::NotificationType::Info);
+            }
+            AppAction::AlertShowCritical => {
+                self.alerts_filter_criticality = Some(crate::types::Criticality::Critical);
+                self.refresh_alerts();
+                self.switch_screen(Screen::Alerts);
+                self.set_notification("Showing critical alerts".to_string(), crate::types::NotificationType::Info);
+            }
+            AppAction::AlertMarkSelectedRead => {
+                if let Some(a) = self.alerts_list.get(self.alerts_selected) {
+                    let _ = self.db.mark_alert_read(a.alert.id, true);
+                    self.refresh_alerts();
+                    self.refresh_dashboard();
+                    self.set_notification("Alert marked as read".to_string(), crate::types::NotificationType::Success);
+                } else {
+                    self.set_notification("No alert selected".to_string(), crate::types::NotificationType::Warning);
+                }
+            }
+            AppAction::AlertMarkSelectedUnread => {
+                if let Some(a) = self.alerts_list.get(self.alerts_selected) {
+                    let _ = self.db.mark_alert_read(a.alert.id, false);
+                    self.refresh_alerts();
+                    self.refresh_dashboard();
+                    self.set_notification("Alert marked as unread".to_string(), crate::types::NotificationType::Success);
+                } else {
+                    self.set_notification("No alert selected".to_string(), crate::types::NotificationType::Warning);
+                }
+            }
+            AppAction::AlertMarkVisibleRead => {
+                let _ = self.db.mark_all_alerts_read(true);
+                self.refresh_alerts();
+                self.refresh_dashboard();
+                self.set_notification("All alerts marked as read".to_string(), crate::types::NotificationType::Success);
+            }
+            AppAction::AlertExportSelectedMarkdown => {
+                self.set_notification("Export not yet implemented".to_string(), crate::types::NotificationType::Warning);
+            }
+            AppAction::AlertExportVisibleMarkdown => {
+                self.set_notification("Export not yet implemented".to_string(), crate::types::NotificationType::Warning);
+            }
+            AppAction::KeywordAdd => {
+                self.open_keyword_add_form();
+            }
+            AppAction::KeywordEditSelected => {
+                if let Some(k) = self.keywords_list.get(self.keywords_selected) {
+                    self.keywords_form = crate::types::KeywordForm {
+                        pattern: k.pattern.clone(),
+                        is_regex: k.is_regex,
+                        case_sensitive: k.case_sensitive,
+                        criticality: k.criticality,
+                        enabled: k.enabled,
+                    };
+                    self.keywords_form_edit_id = Some(k.id);
+                    self.keywords_show_form = true;
+                    self.form_focus = 0;
+                    self.input_mode = InputMode::Normal;
+                    self.set_notification("Edit keyword form opened".to_string(), crate::types::NotificationType::Info);
+                } else {
+                    self.set_notification("No keyword selected".to_string(), crate::types::NotificationType::Warning);
+                }
+            }
+            AppAction::KeywordTestSelected => {
+                if let Some(k) = self.keywords_list.get(self.keywords_selected) {
+                    self.keywords_test_mode = true;
+                    self.keywords_test_input = String::new();
+                    self.keywords_test_results = Vec::new();
+                    self.set_notification(format!("Testing keyword: {}", k.pattern), crate::types::NotificationType::Info);
+                } else {
+                    self.set_notification("No keyword selected".to_string(), crate::types::NotificationType::Warning);
+                }
+            }
+            AppAction::DoctorRun => {
+                self.set_notification("Doctor checks not yet implemented".to_string(), crate::types::NotificationType::Warning);
+            }
+            AppAction::DoctorTor => {
+                self.set_notification("Tor check not yet implemented".to_string(), crate::types::NotificationType::Warning);
+            }
+            AppAction::DoctorDatabase => {
+                self.set_notification("Database check not yet implemented".to_string(), crate::types::NotificationType::Warning);
+            }
+            AppAction::DoctorNotifications => {
+                self.set_notification("Notification check not yet implemented".to_string(), crate::types::NotificationType::Warning);
+            }
+            AppAction::NotifyTestDiscord => {
+                self.set_notification("Discord test not yet implemented".to_string(), crate::types::NotificationType::Warning);
+            }
+            AppAction::NotifyTestWebhook => {
+                self.set_notification("Webhook test not yet implemented".to_string(), crate::types::NotificationType::Warning);
+            }
+            AppAction::NotifyTestEmail => {
+                self.set_notification("Email test not yet implemented".to_string(), crate::types::NotificationType::Warning);
+            }
+        }
+    }
+
+    fn open_feed_add_form(&mut self) {
+        if self.screen != Screen::Feeds {
+            self.switch_screen(Screen::Feeds);
+        }
+        self.feeds_show_form = true;
+        self.feeds_form = crate::types::FeedForm::default();
+        self.feeds_form_edit_id = None;
+        self.input_mode = InputMode::Typing;
+        self.form_focus = 0;
+        self.set_notification("Add feed form opened".to_string(), crate::types::NotificationType::Info);
+    }
+
+    fn open_keyword_add_form(&mut self) {
+        if self.screen != Screen::Keywords {
+            self.switch_screen(Screen::Keywords);
+        }
+        self.keywords_show_form = true;
+        self.keywords_form = crate::types::KeywordForm::default();
+        self.keywords_form_edit_id = None;
+        self.input_mode = InputMode::Typing;
+        self.form_focus = 0;
+        self.set_notification("Add keyword form opened".to_string(), crate::types::NotificationType::Info);
     }
 
     /// Returns true if a data-entry form (not a test/assignment overlay) is active.
