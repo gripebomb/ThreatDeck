@@ -11,6 +11,7 @@ mod enrichment;
 mod feed;
 mod keyword;
 mod notify;
+mod report;
 mod scheduler;
 mod tag;
 mod template;
@@ -139,6 +140,21 @@ struct Cli {
     /// Fetch one URL without storing it, print diagnostics, and exit
     #[arg(long)]
     check_feed: Option<String>,
+    /// Export alert report as Markdown
+    #[arg(long)]
+    report_alert: Option<i64>,
+    /// Export visible alerts as Markdown
+    #[arg(long)]
+    report_alerts_visible: bool,
+    /// Export feed health report as Markdown
+    #[arg(long)]
+    report_feed_health: bool,
+    /// Output path for report export
+    #[arg(long)]
+    report_output: Option<PathBuf>,
+    /// Overwrite existing report file
+    #[arg(long)]
+    report_overwrite: bool,
 }
 
 fn main() -> Result<()> {
@@ -316,10 +332,108 @@ fn main() -> Result<()> {
         }
         return Ok(());
     }
+    if let Some(alert_id) = cli.report_alert {
+        let report_service = crate::report::ReportService::new();
+        let options = threatdeck_report::ReportExportOptions {
+            report_type: threatdeck_report::ReportType::Alert,
+            format: threatdeck_report::ExportFormat::Markdown,
+            output_path: cli.report_output.clone(),
+            include_raw_content: false,
+            include_metadata: true,
+            include_iocs: true,
+            include_enrichment: true,
+            include_triage_history: true,
+            include_feed_health: false,
+            include_tags: true,
+            redact_secrets: true,
+            overwrite: cli.report_overwrite,
+            generated_by: None,
+        };
+        let export_dir = paths.data_dir.join("exports");
+        match report_service.export_alert_report(&db, alert_id, &options, &export_dir) {
+            Ok(result) => {
+                println!("Exported alert report to: {}", result.path.display());
+                println!("  Bytes written: {}", result.bytes_written);
+            }
+            Err(e) => {
+                eprintln!("Export failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+
+    if cli.report_alerts_visible {
+        let report_service = crate::report::ReportService::new();
+        let filter = db::AlertFilter {
+            limit: Some(500),
+            ..db::AlertFilter::default()
+        };
+        let alerts = db.list_alerts(&filter)?;
+        let options = threatdeck_report::ReportExportOptions {
+            report_type: threatdeck_report::ReportType::AlertCollection,
+            format: threatdeck_report::ExportFormat::Markdown,
+            output_path: cli.report_output.clone(),
+            include_raw_content: false,
+            include_metadata: true,
+            include_iocs: true,
+            include_enrichment: true,
+            include_triage_history: true,
+            include_feed_health: false,
+            include_tags: true,
+            redact_secrets: true,
+            overwrite: cli.report_overwrite,
+            generated_by: None,
+        };
+        let export_dir = paths.data_dir.join("exports");
+        match report_service.export_visible_alerts_report(&db, &alerts, &filter, &options, &export_dir) {
+            Ok(result) => {
+                println!("Exported {} alerts to: {}", alerts.len(), result.path.display());
+                println!("  Bytes written: {}", result.bytes_written);
+            }
+            Err(e) => {
+                eprintln!("Export failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+
+    if cli.report_feed_health {
+        let report_service = crate::report::ReportService::new();
+        let options = threatdeck_report::ReportExportOptions {
+            report_type: threatdeck_report::ReportType::FeedHealth,
+            format: threatdeck_report::ExportFormat::Markdown,
+            output_path: cli.report_output.clone(),
+            include_raw_content: false,
+            include_metadata: true,
+            include_iocs: false,
+            include_enrichment: false,
+            include_triage_history: false,
+            include_feed_health: true,
+            include_tags: false,
+            redact_secrets: true,
+            overwrite: cli.report_overwrite,
+            generated_by: None,
+        };
+        let export_dir = paths.data_dir.join("exports");
+        match report_service.export_feed_health_report(&db, &options, &export_dir) {
+            Ok(result) => {
+                println!("Exported feed health report to: {}", result.path.display());
+                println!("  Bytes written: {}", result.bytes_written);
+            }
+            Err(e) => {
+                eprintln!("Export failed: {}", e);
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
+
     if cli.seed_demo {
         seed_demo_data(&db)?;
-        println!("Demo data seeded successfully.");
-        println!("  Feeds:    {}", db.get_feed_count()?);
+        println!("Demo data seeded.");
+        println!("  Feeds:    {}", db.list_feeds(None)?.len());
         println!("  Keywords: {}", db.list_keywords(false)?.len());
         println!("  Alerts:   {}", db.get_alert_count()?);
         println!("  Tags:     {}", db.list_tags()?.len());

@@ -30,6 +30,7 @@ pub enum CommandId {
     AlertMarkVisibleRead,
     AlertExportSelectedMarkdown,
     AlertExportVisibleMarkdown,
+    FeedHealthExportMarkdown,
 
     KeywordAdd,
     KeywordEditSelected,
@@ -121,6 +122,8 @@ pub enum AppAction {
     AlertMarkVisibleRead,
     AlertExportSelectedMarkdown,
     AlertExportVisibleMarkdown,
+    FeedHealthExportMarkdown,
+
     KeywordAdd,
     KeywordEditSelected,
     KeywordTestSelected,

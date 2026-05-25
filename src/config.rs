@@ -16,6 +16,7 @@ pub struct AppConfig {
     pub enrichment: EnrichmentConfig,
     pub triage: TriageConfig,
     pub auto_fetch: AutoFetchConfig,
+    pub reports: ReportConfig,
 }
 
 impl Default for AppConfig {
@@ -30,6 +31,7 @@ impl Default for AppConfig {
             enrichment: EnrichmentConfig::default(),
             triage: TriageConfig::default(),
             auto_fetch: AutoFetchConfig::default(),
+            reports: ReportConfig::default(),
         }
     }
 }
@@ -96,6 +98,32 @@ impl Default for EnrichmentConfig {
         Self {
             enabled: true,
             enrich_only_alert_indicators: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ReportConfig {
+    pub export_dir: String,
+    pub include_iocs_by_default: bool,
+    pub include_enrichment_by_default: bool,
+    pub include_triage_history_by_default: bool,
+    pub include_raw_content_by_default: bool,
+    pub redact_secrets: bool,
+    pub overwrite_existing: bool,
+}
+
+impl Default for ReportConfig {
+    fn default() -> Self {
+        Self {
+            export_dir: "./exports".to_string(),
+            include_iocs_by_default: true,
+            include_enrichment_by_default: true,
+            include_triage_history_by_default: true,
+            include_raw_content_by_default: false,
+            redact_secrets: true,
+            overwrite_existing: false,
         }
     }
 }

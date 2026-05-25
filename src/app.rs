@@ -605,10 +605,103 @@ impl App {
                 self.set_notification("All alerts marked as read".to_string(), crate::types::NotificationType::Success);
             }
             AppAction::AlertExportSelectedMarkdown => {
-                self.set_notification("Export not yet implemented".to_string(), crate::types::NotificationType::Warning);
+                if let Some(alert) = self.alerts_list.get(self.alerts_selected) {
+                    let report_service = crate::report::ReportService::new();
+                    let options = threatdeck_report::ReportExportOptions {
+                        report_type: threatdeck_report::ReportType::Alert,
+                        format: threatdeck_report::ExportFormat::Markdown,
+                        output_path: None,
+                        include_raw_content: false,
+                        include_metadata: true,
+                        include_iocs: true,
+                        include_enrichment: true,
+                        include_triage_history: true,
+                        include_feed_health: false,
+                        include_tags: true,
+                        redact_secrets: true,
+                        overwrite: false,
+                        generated_by: None,
+                    };
+                    let export_dir = self.paths.data_dir.join("exports");
+                    match report_service.export_alert_report(&self.db, alert.alert.id, &options, &export_dir) {
+                        Ok(result) => {
+                            self.set_notification(format!("Exported: {}", result.path.display()), crate::types::NotificationType::Success);
+                        }
+                        Err(e) => {
+                            self.set_notification(format!("Export failed: {}", e), crate::types::NotificationType::Error);
+                        }
+                    }
+                } else {
+                    self.set_notification("No alert selected".to_string(), crate::types::NotificationType::Warning);
+                }
             }
             AppAction::AlertExportVisibleMarkdown => {
-                self.set_notification("Export not yet implemented".to_string(), crate::types::NotificationType::Warning);
+                let report_service = crate::report::ReportService::new();
+                let filter = AlertFilter {
+                    text: if self.alerts_filter.is_empty() {
+                        None
+                    } else {
+                        Some(self.alerts_filter.clone())
+                    },
+                    criticality: self.alerts_filter_criticality,
+                    unread_only: self.alerts_filter_unread_only,
+                    status: self.alerts_filter_status,
+                    disposition: self.alerts_filter_disposition,
+                    open_only: self.alerts_hide_closed,
+                    limit: Some(500),
+                    ..AlertFilter::default()
+                };
+                let options = threatdeck_report::ReportExportOptions {
+                    report_type: threatdeck_report::ReportType::AlertCollection,
+                    format: threatdeck_report::ExportFormat::Markdown,
+                    output_path: None,
+                    include_raw_content: false,
+                    include_metadata: true,
+                    include_iocs: true,
+                    include_enrichment: true,
+                    include_triage_history: true,
+                    include_feed_health: false,
+                    include_tags: true,
+                    redact_secrets: true,
+                    overwrite: false,
+                    generated_by: None,
+                };
+                let export_dir = self.paths.data_dir.join("exports");
+                match report_service.export_visible_alerts_report(&self.db, &self.alerts_list, &filter, &options, &export_dir) {
+                    Ok(result) => {
+                        self.set_notification(format!("Exported {} alerts: {}", self.alerts_list.len(), result.path.display()), crate::types::NotificationType::Success);
+                    }
+                    Err(e) => {
+                        self.set_notification(format!("Export failed: {}", e), crate::types::NotificationType::Error);
+                    }
+                }
+            }
+            AppAction::FeedHealthExportMarkdown => {
+                let report_service = crate::report::ReportService::new();
+                let options = threatdeck_report::ReportExportOptions {
+                    report_type: threatdeck_report::ReportType::FeedHealth,
+                    format: threatdeck_report::ExportFormat::Markdown,
+                    output_path: None,
+                    include_raw_content: false,
+                    include_metadata: true,
+                    include_iocs: false,
+                    include_enrichment: false,
+                    include_triage_history: false,
+                    include_feed_health: true,
+                    include_tags: false,
+                    redact_secrets: true,
+                    overwrite: false,
+                    generated_by: None,
+                };
+                let export_dir = self.paths.data_dir.join("exports");
+                match report_service.export_feed_health_report(&self.db, &options, &export_dir) {
+                    Ok(result) => {
+                        self.set_notification(format!("Exported feed health: {}", result.path.display()), crate::types::NotificationType::Success);
+                    }
+                    Err(e) => {
+                        self.set_notification(format!("Export failed: {}", e), crate::types::NotificationType::Error);
+                    }
+                }
             }
             AppAction::KeywordAdd => {
                 self.open_keyword_add_form();

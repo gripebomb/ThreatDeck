@@ -303,6 +303,17 @@ pub static ALL_COMMANDS: &[Command] = &[
         action: CommandAction::Dispatch(AppAction::AlertExportVisibleMarkdown),
     },
     Command {
+        id: CommandId::FeedHealthExportMarkdown,
+        canonical: "feed health export markdown",
+        title: "Export Feed Health Report (Markdown)",
+        description: "Export feed health status as Markdown.",
+        group: CommandGroup::Feed,
+        aliases: &["export feed health", "feed health markdown"],
+        keywords: &["feed", "health", "export", "markdown", "status"],
+        availability: CommandAvailability::Always,
+        action: CommandAction::Dispatch(AppAction::FeedHealthExportMarkdown),
+    },
+    Command {
         id: CommandId::KeywordAdd,
         canonical: "keyword add",
         title: "Add Keyword",

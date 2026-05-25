@@ -3834,3 +3834,119 @@ pub struct NotificationUpdate {
     pub enabled: Option<bool>,
     pub min_criticality: Option<Criticality>,
 }
+
+#[derive(Debug, Clone)]
+pub struct AlertReportData {
+    pub alert: Alert,
+    pub feed_name: String,
+    pub feed_type: String,
+    pub feed_url: String,
+    pub keyword_pattern: String,
+    pub keyword_match_type: String,
+    pub keyword_criticality: String,
+    pub tags: Vec<Tag>,
+    pub indicators: Vec<IndicatorRecord>,
+    pub triage_history: Vec<AlertTriageEvent>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AlertTriageEvent {
+    pub id: i64,
+    pub alert_id: i64,
+    pub event_type: String,
+    pub old_value: Option<String>,
+    pub new_value: Option<String>,
+    pub actor: Option<String>,
+    pub note: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct FeedHealthRecord {
+    pub id: i64,
+    pub name: String,
+    pub feed_type: String,
+    pub enabled: bool,
+    pub status: String,
+    pub consecutive_failures: i64,
+    pub last_fetch_at: Option<DateTime<Utc>>,
+    pub last_fetch_success_at: Option<DateTime<Utc>>,
+    pub last_error: Option<String>,
+}
+
+impl Db {
+    pub fn get_alert_report_data(&self, alert_id: i64) -> Result<Option<AlertReportData>> {
+        let alert = match self.get_alert(alert_id)? {
+            Some(a) => a,
+            None => return Ok(None),
+        };
+
+        let feed = self.get_feed(alert.feed_id)?;
+        let keyword = self.get_keyword(alert.keyword_id)?;
+
+        let tags = self.get_alert_tags(alert_id)?;
+        let indicators = self.list_indicators_for_alert(alert_id)?;
+        let triage_history = self.list_alert_triage_events(alert_id)?;
+
+        let feed_name = feed.as_ref().map(|f| f.name.clone()).unwrap_or_default();
+        let feed_type = feed.as_ref().map(|f| format!("{:?}", f.feed_type)).unwrap_or_default();
+        let feed_url = feed.as_ref().map(|f| f.url.clone()).unwrap_or_default();
+
+        let keyword_pattern = keyword.as_ref().map(|k| k.pattern.clone()).unwrap_or_default();
+        let keyword_match_type = keyword.as_ref().map(|k| if k.is_regex { "Regex".to_string() } else { "Simple".to_string() }).unwrap_or_default();
+        let keyword_criticality = keyword.as_ref().map(|k| format!("{:?}", k.criticality)).unwrap_or_default();
+
+        Ok(Some(AlertReportData {
+            alert,
+            feed_name,
+            feed_type,
+            feed_url,
+            keyword_pattern,
+            keyword_match_type,
+            keyword_criticality,
+            tags,
+            indicators,
+            triage_history,
+        }))
+    }
+
+    pub fn list_feed_health(&self) -> Result<Vec<FeedHealthRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, feed_type, enabled, consecutive_failures, last_fetch_at,
+                    last_fetch_success_at, last_error
+             FROM feeds
+             ORDER BY name"
+        )?;
+
+        let rows = stmt.query_map([], |row| {
+            let enabled: i64 = row.get(3)?;
+            let consecutive_failures: i64 = row.get(4)?;
+
+            let status = if enabled == 0 {
+                "Disabled"
+            } else if consecutive_failures >= 5 {
+                "Error"
+            } else if consecutive_failures >= 2 {
+                "Warning"
+            } else {
+                "Healthy"
+            };
+
+            let feed_type_str: String = row.get(2)?;
+
+            Ok(FeedHealthRecord {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                feed_type: feed_type_str,
+                enabled: enabled != 0,
+                status: status.to_string(),
+                consecutive_failures,
+                last_fetch_at: row.get::<_, Option<String>>(5)?.and_then(|s| parse_ts(&s)),
+                last_fetch_success_at: row.get::<_, Option<String>>(6)?.and_then(|s| parse_ts(&s)),
+                last_error: row.get(7)?,
+            })
+        })?;
+
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+}

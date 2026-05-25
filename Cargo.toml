@@ -11,7 +11,7 @@ authors = ["gripebomb"]
 exclude = ["target/", ".git/"]
 
 [workspace]
-members = ["crates/sentinel-ioc", "crates/sentinel-enrichment"]
+members = ["crates/sentinel-ioc", "crates/sentinel-enrichment", "crates/threatdeck-report"]
 
 [[bin]]
 name = "ThreatDeck"
@@ -49,6 +49,7 @@ atom_syndication = "0.12"
 rss = "2"
 sentinel-enrichment = { version = "0.1.1", path = "crates/sentinel-enrichment" }
 sentinel-ioc = { version = "0.1.0", path = "crates/sentinel-ioc" }
+threatdeck-report = { version = "0.1.0", path = "crates/threatdeck-report" }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

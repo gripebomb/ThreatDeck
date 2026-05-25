@@ -29,3 +29,7 @@
 
 docs/
 .sisyphus/
+
+# Understand Anything
+.understand-anything/intermediate/
+.understand-anything/diff-overlay.json
