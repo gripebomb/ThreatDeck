@@ -1,3 +1,5 @@
+use crate::app::App;
+use crate::ui::command_palette::PaletteMode;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
@@ -5,8 +7,6 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
-use crate::app::App;
-use crate::ui::command_palette::PaletteMode;
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let state = &app.command_palette.state;
@@ -55,11 +55,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let visible_count = results_area.height as usize;
 
     if state.results.is_empty() {
-        let empty_text = if state.input.is_empty() || (state.mode == PaletteMode::Colon && state.input == ":") {
-            "Type to search commands..."
-        } else {
-            "No commands found"
-        };
+        let empty_text =
+            if state.input.is_empty() || (state.mode == PaletteMode::Colon && state.input == ":") {
+                "Type to search commands..."
+            } else {
+                "No commands found"
+            };
         let empty = Paragraph::new(empty_text)
             .style(Style::default().fg(app.theme.muted))
             .alignment(ratatui::layout::Alignment::Center);

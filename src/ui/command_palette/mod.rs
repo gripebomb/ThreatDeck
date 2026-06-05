@@ -4,9 +4,7 @@ pub mod registry;
 pub mod render;
 pub mod state;
 
-pub use command::{
-    AppAction, CommandAction, CommandId, ModalKind,
-};
+pub use command::{AppAction, CommandAction, CommandId, ModalKind};
 pub use state::{CommandPaletteState, PaletteMode};
 
 #[derive(Debug, Clone, Default)]

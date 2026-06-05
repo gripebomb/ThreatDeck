@@ -386,9 +386,19 @@ fn main() -> Result<()> {
             generated_by: None,
         };
         let export_dir = paths.data_dir.join("exports");
-        match report_service.export_visible_alerts_report(&db, &alerts, &filter, &options, &export_dir) {
+        match report_service.export_visible_alerts_report(
+            &db,
+            &alerts,
+            &filter,
+            &options,
+            &export_dir,
+        ) {
             Ok(result) => {
-                println!("Exported {} alerts to: {}", alerts.len(), result.path.display());
+                println!(
+                    "Exported {} alerts to: {}",
+                    alerts.len(),
+                    result.path.display()
+                );
                 println!("  Bytes written: {}", result.bytes_written);
             }
             Err(e) => {

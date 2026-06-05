@@ -5,7 +5,7 @@ use std::time::Duration;
 pub fn fetch_article_text(url: &str) -> Result<String> {
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(20))
-        .user_agent("ThreatDeck/0.4.0 article reader")
+        .user_agent("ThreatDeck/0.5.0 article reader")
         .build();
     let body = agent
         .get(url)

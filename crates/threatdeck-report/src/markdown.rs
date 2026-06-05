@@ -13,20 +13,35 @@ pub fn render_alert_report(report: &AlertReport, options: &ReportExportOptions) 
     out.push_str("| Field | Value |\n");
     out.push_str("|---|---|\n");
     out.push_str(&format!("| Alert ID | {} |\n", report.alert_id));
-    out.push_str(&format!("| Criticality | {} |\n", escape_table_cell(&report.criticality)));
+    out.push_str(&format!(
+        "| Criticality | {} |\n",
+        escape_table_cell(&report.criticality)
+    ));
     if let Some(severity) = &report.severity {
         out.push_str(&format!("| Severity | {} |\n", escape_table_cell(severity)));
     }
     if let Some(score) = report.confidence_score {
         out.push_str(&format!("| Confidence | {} |\n", score));
     }
-    out.push_str(&format!("| Status | {} |\n", escape_table_cell(&report.status)));
-    out.push_str(&format!("| Disposition | {} |\n", escape_table_cell(&report.disposition)));
+    out.push_str(&format!(
+        "| Status | {} |\n",
+        escape_table_cell(&report.status)
+    ));
+    out.push_str(&format!(
+        "| Disposition | {} |\n",
+        escape_table_cell(&report.disposition)
+    ));
     if let Some(owner) = &report.owner {
         out.push_str(&format!("| Owner | {} |\n", escape_table_cell(owner)));
     }
-    out.push_str(&format!("| Detected | {} |\n", escape_table_cell(&report.detected_at)));
-    out.push_str(&format!("| Generated | {} |\n", escape_table_cell(&report.generated_at)));
+    out.push_str(&format!(
+        "| Detected | {} |\n",
+        escape_table_cell(&report.detected_at)
+    ));
+    out.push_str(&format!(
+        "| Generated | {} |\n",
+        escape_table_cell(&report.generated_at)
+    ));
     out.push('\n');
 
     out.push_str("## Source\n\n");
@@ -230,7 +245,9 @@ pub fn render_feed_health_report(report: &FeedHealthReport) -> String {
 
     if !report.feeds.is_empty() {
         out.push_str("## Feed Health Details\n\n");
-        out.push_str("| Feed | Type | Status | Failures | Last Fetch | Last Success | Last Error |\n");
+        out.push_str(
+            "| Feed | Type | Status | Failures | Last Fetch | Last Success | Last Error |\n",
+        );
         out.push_str("|---|---|---|---|---|---|---|\n");
         for feed in &report.feeds {
             out.push_str(&format!(
@@ -253,7 +270,10 @@ pub fn render_feed_health_report(report: &FeedHealthReport) -> String {
 pub fn render_daily_summary_report(report: &DailySummaryReport) -> String {
     let mut out = String::new();
 
-    out.push_str(&format!("# ThreatDeck Daily Summary Report: {}\n\n", report.date));
+    out.push_str(&format!(
+        "# ThreatDeck Daily Summary Report: {}\n\n",
+        report.date
+    ));
 
     out.push_str(
         "> **Handling Notice:** This report may contain sensitive threat intelligence, internal triage notes, indicators, and source metadata. Share only with appropriate recipients.\n\n",
@@ -262,7 +282,10 @@ pub fn render_daily_summary_report(report: &DailySummaryReport) -> String {
     out.push_str("## Executive Summary\n\n");
     out.push_str(&format!("- **Total Alerts:** {}\n", report.alert_count));
     out.push_str(&format!("- **Unread Alerts:** {}\n", report.unread_count));
-    out.push_str(&format!("- **Critical Alerts:** {}\n", report.critical_count));
+    out.push_str(&format!(
+        "- **Critical Alerts:** {}\n",
+        report.critical_count
+    ));
     out.push_str(&format!("- **High Alerts:** {}\n", report.high_count));
     out.push_str(&format!("- **Feeds Checked:** {}\n", report.feeds_checked));
     out.push_str(&format!("- **Failed Feeds:** {}\n\n", report.failed_feeds));
@@ -331,11 +354,26 @@ pub fn fenced_code_block(language: Option<&str>, input: &str) -> String {
 
 pub fn redact_sensitive(input: &str) -> String {
     let patterns = [
-        (regex::Regex::new(r"(?i)(api[_-]?key\s*[:=]\s*)[^\s&]+").unwrap(), "${1}***REDACTED***"),
-        (regex::Regex::new(r"(?i)(authorization\s*[:=]\s*bearer\s+)\S+").unwrap(), "${1}***REDACTED***"),
-        (regex::Regex::new(r"(?i)(token\s*[:=]\s*)[^\s&]+").unwrap(), "${1}***REDACTED***"),
-        (regex::Regex::new(r"(?i)(password\s*[:=]\s*)[^\s&]+").unwrap(), "${1}***REDACTED***"),
-        (regex::Regex::new(r"(?i)(secret\s*[:=]\s*)[^\s&]+").unwrap(), "${1}***REDACTED***"),
+        (
+            regex::Regex::new(r"(?i)(api[_-]?key\s*[:=]\s*)[^\s&]+").unwrap(),
+            "${1}***REDACTED***",
+        ),
+        (
+            regex::Regex::new(r"(?i)(authorization\s*[:=]\s*bearer\s+)\S+").unwrap(),
+            "${1}***REDACTED***",
+        ),
+        (
+            regex::Regex::new(r"(?i)(token\s*[:=]\s*)[^\s&]+").unwrap(),
+            "${1}***REDACTED***",
+        ),
+        (
+            regex::Regex::new(r"(?i)(password\s*[:=]\s*)[^\s&]+").unwrap(),
+            "${1}***REDACTED***",
+        ),
+        (
+            regex::Regex::new(r"(?i)(secret\s*[:=]\s*)[^\s&]+").unwrap(),
+            "${1}***REDACTED***",
+        ),
     ];
 
     let mut result = input.to_string();

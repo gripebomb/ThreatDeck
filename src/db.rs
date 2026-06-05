@@ -3889,12 +3889,30 @@ impl Db {
         let triage_history = self.list_alert_triage_events(alert_id)?;
 
         let feed_name = feed.as_ref().map(|f| f.name.clone()).unwrap_or_default();
-        let feed_type = feed.as_ref().map(|f| format!("{:?}", f.feed_type)).unwrap_or_default();
+        let feed_type = feed
+            .as_ref()
+            .map(|f| format!("{:?}", f.feed_type))
+            .unwrap_or_default();
         let feed_url = feed.as_ref().map(|f| f.url.clone()).unwrap_or_default();
 
-        let keyword_pattern = keyword.as_ref().map(|k| k.pattern.clone()).unwrap_or_default();
-        let keyword_match_type = keyword.as_ref().map(|k| if k.is_regex { "Regex".to_string() } else { "Simple".to_string() }).unwrap_or_default();
-        let keyword_criticality = keyword.as_ref().map(|k| format!("{:?}", k.criticality)).unwrap_or_default();
+        let keyword_pattern = keyword
+            .as_ref()
+            .map(|k| k.pattern.clone())
+            .unwrap_or_default();
+        let keyword_match_type = keyword
+            .as_ref()
+            .map(|k| {
+                if k.is_regex {
+                    "Regex".to_string()
+                } else {
+                    "Simple".to_string()
+                }
+            })
+            .unwrap_or_default();
+        let keyword_criticality = keyword
+            .as_ref()
+            .map(|k| format!("{:?}", k.criticality))
+            .unwrap_or_default();
 
         Ok(Some(AlertReportData {
             alert,
@@ -3915,7 +3933,7 @@ impl Db {
             "SELECT id, name, feed_type, enabled, consecutive_failures, last_fetch_at,
                     last_fetch_success_at, last_error
              FROM feeds
-             ORDER BY name"
+             ORDER BY name",
         )?;
 
         let rows = stmt.query_map([], |row| {

@@ -2,7 +2,11 @@ use crate::types::ReportType;
 use chrono::Utc;
 use std::path::PathBuf;
 
-pub fn generate_filename(report_type: ReportType, alert_id: Option<i64>, indicator_value: Option<&str>) -> String {
+pub fn generate_filename(
+    report_type: ReportType,
+    alert_id: Option<i64>,
+    indicator_value: Option<&str>,
+) -> String {
     let timestamp = Utc::now().format("%Y-%m-%d-%H%M%S");
 
     match report_type {

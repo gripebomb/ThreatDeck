@@ -7,9 +7,9 @@ use std::fs;
 use std::path::Path;
 use threatdeck_report::{
     generate_filename, render_alert_collection_report, render_alert_report,
-    render_feed_health_report, ReportCount, ReportExportOptions, ReportExportResult, ReportFeedHealth,
-    ReportFeedSummary, ReportIndicator, ReportKeywordSummary, ReportTag, ReportTriageEvent,
-    ReportType,
+    render_feed_health_report, ReportCount, ReportExportOptions, ReportExportResult,
+    ReportFeedHealth, ReportFeedSummary, ReportIndicator, ReportKeywordSummary, ReportTag,
+    ReportTriageEvent, ReportType,
 };
 
 pub struct ReportService;
@@ -200,7 +200,10 @@ impl ReportService {
 
         Ok(threatdeck_report::AlertReport {
             alert_id: alert.id,
-            title: alert.title.clone().unwrap_or_else(|| format!("Alert {}", alert.id)),
+            title: alert
+                .title
+                .clone()
+                .unwrap_or_else(|| format!("Alert {}", alert.id)),
             summary: None,
             criticality: format!("{:?}", alert.criticality),
             severity: alert.severity_override.map(|s| format!("{:?}", s)),
@@ -208,7 +211,10 @@ impl ReportService {
             status: format!("{:?}", alert.status),
             disposition: format!("{:?}", alert.disposition),
             owner: alert.owner.clone(),
-            detected_at: alert.detected_at.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+            detected_at: alert
+                .detected_at
+                .format("%Y-%m-%d %H:%M:%S UTC")
+                .to_string(),
             feed: ReportFeedSummary {
                 feed_id: alert.feed_id,
                 name: data.feed_name.clone(),
@@ -284,10 +290,18 @@ impl ReportService {
             .iter()
             .map(|a| threatdeck_report::AlertReportSummary {
                 alert_id: a.alert.id,
-                title: a.alert.title.clone().unwrap_or_else(|| format!("Alert {}", a.alert.id)),
+                title: a
+                    .alert
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| format!("Alert {}", a.alert.id)),
                 criticality: format!("{:?}", a.alert.criticality),
                 status: format!("{:?}", a.alert.status),
-                detected_at: a.alert.detected_at.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
+                detected_at: a
+                    .alert
+                    .detected_at
+                    .format("%Y-%m-%d %H:%M:%S UTC")
+                    .to_string(),
                 feed_name: a.feed_name.clone(),
                 keyword_pattern: a.keyword_pattern.clone(),
             })

@@ -8,8 +8,8 @@ Provider-neutral IOC enrichment types and local test providers used by ThreatDec
 
 ```toml
 [dependencies]
-sentinel-enrichment = "0.4.0"
-sentinel-ioc = "0.4.0"
+sentinel-enrichment = "0.1.1"
+sentinel-ioc = "0.1.0"
 ```
 
 ## What It Provides

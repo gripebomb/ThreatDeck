@@ -8,12 +8,10 @@ use crate::db::{
     AlertFilter, Db, EnrichmentJobWithContext, EnrichmentProviderRecord, IndicatorRecord,
     IndicatorSearch,
 };
-use crate::ui::command_palette::{
-    CommandPalette, CommandId, CommandAction, ModalKind, AppAction,
-};
 use crate::theme::{get_runtime_theme, Theme};
 use crate::types::*;
 use crate::ui;
+use crate::ui::command_palette::{AppAction, CommandAction, CommandId, CommandPalette, ModalKind};
 use std::sync::mpsc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -466,15 +464,14 @@ impl App {
         }
     }
 
-    fn execute_command(
-        &mut self,
-        _cmd_id: CommandId,
-        action: CommandAction,
-    ) {
+    fn execute_command(&mut self, _cmd_id: CommandId, action: CommandAction) {
         match action {
             CommandAction::Navigate(screen) => {
                 self.switch_screen(screen);
-                self.set_notification(format!("Opened {}", screen), crate::types::NotificationType::Info);
+                self.set_notification(
+                    format!("Opened {}", screen),
+                    crate::types::NotificationType::Info,
+                );
             }
             CommandAction::OpenModal(modal) => {
                 if modal == ModalKind::Help {
@@ -491,7 +488,6 @@ impl App {
     }
 
     fn handle_app_action(&mut self, action: AppAction) {
-
         match action {
             AppAction::Refresh => {
                 match self.screen {
@@ -506,7 +502,10 @@ impl App {
                     Screen::Logs => self.refresh_logs(),
                     Screen::Settings => self.refresh_settings(),
                 }
-                self.set_notification("Refreshed".to_string(), crate::types::NotificationType::Success);
+                self.set_notification(
+                    "Refreshed".to_string(),
+                    crate::types::NotificationType::Success,
+                );
             }
             AppAction::FeedAdd => {
                 self.open_feed_add_form();
@@ -529,63 +528,107 @@ impl App {
                     self.feeds_show_form = true;
                     self.form_focus = 0;
                     self.input_mode = InputMode::Normal;
-                    self.set_notification("Edit feed form opened".to_string(), crate::types::NotificationType::Info);
+                    self.set_notification(
+                        "Edit feed form opened".to_string(),
+                        crate::types::NotificationType::Info,
+                    );
                 } else {
-                    self.set_notification("No feed selected".to_string(), crate::types::NotificationType::Warning);
+                    self.set_notification(
+                        "No feed selected".to_string(),
+                        crate::types::NotificationType::Warning,
+                    );
                 }
             }
             AppAction::FeedCheckSelected => {
                 if self.feeds_list.is_empty() {
-                    self.set_notification("No feed selected".to_string(), crate::types::NotificationType::Warning);
+                    self.set_notification(
+                        "No feed selected".to_string(),
+                        crate::types::NotificationType::Warning,
+                    );
                 } else {
                     self.fetch_selected_feed();
                 }
             }
             AppAction::FeedCheckAll => {
-                self.set_notification("Checking all enabled feeds...".to_string(), crate::types::NotificationType::Info);
+                self.set_notification(
+                    "Checking all enabled feeds...".to_string(),
+                    crate::types::NotificationType::Info,
+                );
             }
             AppAction::FeedEnableSelected => {
-                if let Some(feed_id) = self.feeds_list.get(self.feeds_selected).map(|ft| ft.feed.id) {
+                if let Some(feed_id) = self
+                    .feeds_list
+                    .get(self.feeds_selected)
+                    .map(|ft| ft.feed.id)
+                {
                     let _ = self.db.toggle_feed_enabled(feed_id);
                     self.refresh_feeds();
                     if let Some(ft) = self.feeds_list.get(self.feeds_selected) {
-                        self.set_notification(format!("Feed '{}' enabled", ft.feed.name), crate::types::NotificationType::Success);
+                        self.set_notification(
+                            format!("Feed '{}' enabled", ft.feed.name),
+                            crate::types::NotificationType::Success,
+                        );
                     }
                 } else {
-                    self.set_notification("No feed selected".to_string(), crate::types::NotificationType::Warning);
+                    self.set_notification(
+                        "No feed selected".to_string(),
+                        crate::types::NotificationType::Warning,
+                    );
                 }
             }
             AppAction::FeedDisableSelected => {
-                if let Some(feed_id) = self.feeds_list.get(self.feeds_selected).map(|ft| ft.feed.id) {
+                if let Some(feed_id) = self
+                    .feeds_list
+                    .get(self.feeds_selected)
+                    .map(|ft| ft.feed.id)
+                {
                     let _ = self.db.toggle_feed_enabled(feed_id);
                     self.refresh_feeds();
                     if let Some(ft) = self.feeds_list.get(self.feeds_selected) {
-                        self.set_notification(format!("Feed '{}' disabled", ft.feed.name), crate::types::NotificationType::Success);
+                        self.set_notification(
+                            format!("Feed '{}' disabled", ft.feed.name),
+                            crate::types::NotificationType::Success,
+                        );
                     }
                 } else {
-                    self.set_notification("No feed selected".to_string(), crate::types::NotificationType::Warning);
+                    self.set_notification(
+                        "No feed selected".to_string(),
+                        crate::types::NotificationType::Warning,
+                    );
                 }
             }
             AppAction::AlertShowUnread => {
                 self.alerts_filter_unread_only = true;
                 self.refresh_alerts();
                 self.switch_screen(Screen::Alerts);
-                self.set_notification("Showing unread alerts".to_string(), crate::types::NotificationType::Info);
+                self.set_notification(
+                    "Showing unread alerts".to_string(),
+                    crate::types::NotificationType::Info,
+                );
             }
             AppAction::AlertShowCritical => {
                 self.alerts_filter_criticality = Some(crate::types::Criticality::Critical);
                 self.refresh_alerts();
                 self.switch_screen(Screen::Alerts);
-                self.set_notification("Showing critical alerts".to_string(), crate::types::NotificationType::Info);
+                self.set_notification(
+                    "Showing critical alerts".to_string(),
+                    crate::types::NotificationType::Info,
+                );
             }
             AppAction::AlertMarkSelectedRead => {
                 if let Some(a) = self.alerts_list.get(self.alerts_selected) {
                     let _ = self.db.mark_alert_read(a.alert.id, true);
                     self.refresh_alerts();
                     self.refresh_dashboard();
-                    self.set_notification("Alert marked as read".to_string(), crate::types::NotificationType::Success);
+                    self.set_notification(
+                        "Alert marked as read".to_string(),
+                        crate::types::NotificationType::Success,
+                    );
                 } else {
-                    self.set_notification("No alert selected".to_string(), crate::types::NotificationType::Warning);
+                    self.set_notification(
+                        "No alert selected".to_string(),
+                        crate::types::NotificationType::Warning,
+                    );
                 }
             }
             AppAction::AlertMarkSelectedUnread => {
@@ -593,16 +636,25 @@ impl App {
                     let _ = self.db.mark_alert_read(a.alert.id, false);
                     self.refresh_alerts();
                     self.refresh_dashboard();
-                    self.set_notification("Alert marked as unread".to_string(), crate::types::NotificationType::Success);
+                    self.set_notification(
+                        "Alert marked as unread".to_string(),
+                        crate::types::NotificationType::Success,
+                    );
                 } else {
-                    self.set_notification("No alert selected".to_string(), crate::types::NotificationType::Warning);
+                    self.set_notification(
+                        "No alert selected".to_string(),
+                        crate::types::NotificationType::Warning,
+                    );
                 }
             }
             AppAction::AlertMarkVisibleRead => {
                 let _ = self.db.mark_all_alerts_read(true);
                 self.refresh_alerts();
                 self.refresh_dashboard();
-                self.set_notification("All alerts marked as read".to_string(), crate::types::NotificationType::Success);
+                self.set_notification(
+                    "All alerts marked as read".to_string(),
+                    crate::types::NotificationType::Success,
+                );
             }
             AppAction::AlertExportSelectedMarkdown => {
                 if let Some(alert) = self.alerts_list.get(self.alerts_selected) {
@@ -623,16 +675,30 @@ impl App {
                         generated_by: None,
                     };
                     let export_dir = self.paths.data_dir.join("exports");
-                    match report_service.export_alert_report(&self.db, alert.alert.id, &options, &export_dir) {
+                    match report_service.export_alert_report(
+                        &self.db,
+                        alert.alert.id,
+                        &options,
+                        &export_dir,
+                    ) {
                         Ok(result) => {
-                            self.set_notification(format!("Exported: {}", result.path.display()), crate::types::NotificationType::Success);
+                            self.set_notification(
+                                format!("Exported: {}", result.path.display()),
+                                crate::types::NotificationType::Success,
+                            );
                         }
                         Err(e) => {
-                            self.set_notification(format!("Export failed: {}", e), crate::types::NotificationType::Error);
+                            self.set_notification(
+                                format!("Export failed: {}", e),
+                                crate::types::NotificationType::Error,
+                            );
                         }
                     }
                 } else {
-                    self.set_notification("No alert selected".to_string(), crate::types::NotificationType::Warning);
+                    self.set_notification(
+                        "No alert selected".to_string(),
+                        crate::types::NotificationType::Warning,
+                    );
                 }
             }
             AppAction::AlertExportVisibleMarkdown => {
@@ -667,12 +733,28 @@ impl App {
                     generated_by: None,
                 };
                 let export_dir = self.paths.data_dir.join("exports");
-                match report_service.export_visible_alerts_report(&self.db, &self.alerts_list, &filter, &options, &export_dir) {
+                match report_service.export_visible_alerts_report(
+                    &self.db,
+                    &self.alerts_list,
+                    &filter,
+                    &options,
+                    &export_dir,
+                ) {
                     Ok(result) => {
-                        self.set_notification(format!("Exported {} alerts: {}", self.alerts_list.len(), result.path.display()), crate::types::NotificationType::Success);
+                        self.set_notification(
+                            format!(
+                                "Exported {} alerts: {}",
+                                self.alerts_list.len(),
+                                result.path.display()
+                            ),
+                            crate::types::NotificationType::Success,
+                        );
                     }
                     Err(e) => {
-                        self.set_notification(format!("Export failed: {}", e), crate::types::NotificationType::Error);
+                        self.set_notification(
+                            format!("Export failed: {}", e),
+                            crate::types::NotificationType::Error,
+                        );
                     }
                 }
             }
@@ -696,10 +778,16 @@ impl App {
                 let export_dir = self.paths.data_dir.join("exports");
                 match report_service.export_feed_health_report(&self.db, &options, &export_dir) {
                     Ok(result) => {
-                        self.set_notification(format!("Exported feed health: {}", result.path.display()), crate::types::NotificationType::Success);
+                        self.set_notification(
+                            format!("Exported feed health: {}", result.path.display()),
+                            crate::types::NotificationType::Success,
+                        );
                     }
                     Err(e) => {
-                        self.set_notification(format!("Export failed: {}", e), crate::types::NotificationType::Error);
+                        self.set_notification(
+                            format!("Export failed: {}", e),
+                            crate::types::NotificationType::Error,
+                        );
                     }
                 }
             }
@@ -719,9 +807,15 @@ impl App {
                     self.keywords_show_form = true;
                     self.form_focus = 0;
                     self.input_mode = InputMode::Normal;
-                    self.set_notification("Edit keyword form opened".to_string(), crate::types::NotificationType::Info);
+                    self.set_notification(
+                        "Edit keyword form opened".to_string(),
+                        crate::types::NotificationType::Info,
+                    );
                 } else {
-                    self.set_notification("No keyword selected".to_string(), crate::types::NotificationType::Warning);
+                    self.set_notification(
+                        "No keyword selected".to_string(),
+                        crate::types::NotificationType::Warning,
+                    );
                 }
             }
             AppAction::KeywordTestSelected => {
@@ -729,31 +823,58 @@ impl App {
                     self.keywords_test_mode = true;
                     self.keywords_test_input = String::new();
                     self.keywords_test_results = Vec::new();
-                    self.set_notification(format!("Testing keyword: {}", k.pattern), crate::types::NotificationType::Info);
+                    self.set_notification(
+                        format!("Testing keyword: {}", k.pattern),
+                        crate::types::NotificationType::Info,
+                    );
                 } else {
-                    self.set_notification("No keyword selected".to_string(), crate::types::NotificationType::Warning);
+                    self.set_notification(
+                        "No keyword selected".to_string(),
+                        crate::types::NotificationType::Warning,
+                    );
                 }
             }
             AppAction::DoctorRun => {
-                self.set_notification("Doctor checks not yet implemented".to_string(), crate::types::NotificationType::Warning);
+                self.set_notification(
+                    "Doctor checks not yet implemented".to_string(),
+                    crate::types::NotificationType::Warning,
+                );
             }
             AppAction::DoctorTor => {
-                self.set_notification("Tor check not yet implemented".to_string(), crate::types::NotificationType::Warning);
+                self.set_notification(
+                    "Tor check not yet implemented".to_string(),
+                    crate::types::NotificationType::Warning,
+                );
             }
             AppAction::DoctorDatabase => {
-                self.set_notification("Database check not yet implemented".to_string(), crate::types::NotificationType::Warning);
+                self.set_notification(
+                    "Database check not yet implemented".to_string(),
+                    crate::types::NotificationType::Warning,
+                );
             }
             AppAction::DoctorNotifications => {
-                self.set_notification("Notification check not yet implemented".to_string(), crate::types::NotificationType::Warning);
+                self.set_notification(
+                    "Notification check not yet implemented".to_string(),
+                    crate::types::NotificationType::Warning,
+                );
             }
             AppAction::NotifyTestDiscord => {
-                self.set_notification("Discord test not yet implemented".to_string(), crate::types::NotificationType::Warning);
+                self.set_notification(
+                    "Discord test not yet implemented".to_string(),
+                    crate::types::NotificationType::Warning,
+                );
             }
             AppAction::NotifyTestWebhook => {
-                self.set_notification("Webhook test not yet implemented".to_string(), crate::types::NotificationType::Warning);
+                self.set_notification(
+                    "Webhook test not yet implemented".to_string(),
+                    crate::types::NotificationType::Warning,
+                );
             }
             AppAction::NotifyTestEmail => {
-                self.set_notification("Email test not yet implemented".to_string(), crate::types::NotificationType::Warning);
+                self.set_notification(
+                    "Email test not yet implemented".to_string(),
+                    crate::types::NotificationType::Warning,
+                );
             }
         }
     }
@@ -767,7 +888,10 @@ impl App {
         self.feeds_form_edit_id = None;
         self.input_mode = InputMode::Typing;
         self.form_focus = 0;
-        self.set_notification("Add feed form opened".to_string(), crate::types::NotificationType::Info);
+        self.set_notification(
+            "Add feed form opened".to_string(),
+            crate::types::NotificationType::Info,
+        );
     }
 
     fn open_keyword_add_form(&mut self) {
@@ -779,7 +903,10 @@ impl App {
         self.keywords_form_edit_id = None;
         self.input_mode = InputMode::Typing;
         self.form_focus = 0;
-        self.set_notification("Add keyword form opened".to_string(), crate::types::NotificationType::Info);
+        self.set_notification(
+            "Add keyword form opened".to_string(),
+            crate::types::NotificationType::Info,
+        );
     }
 
     /// Returns true if a data-entry form (not a test/assignment overlay) is active.

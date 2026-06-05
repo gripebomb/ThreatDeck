@@ -38,7 +38,10 @@ pub fn match_commands(input: &str) -> Vec<CommandMatch> {
     if normalized.is_empty() {
         return ALL_COMMANDS
             .iter()
-            .map(|cmd| CommandMatch { command: cmd.clone(), score: 0 })
+            .map(|cmd| CommandMatch {
+                command: cmd.clone(),
+                score: 0,
+            })
             .collect();
     }
 
@@ -49,7 +52,8 @@ pub fn match_commands(input: &str) -> Vec<CommandMatch> {
         .collect();
 
     matches.sort_by(|a, b| {
-        b.score.cmp(&a.score)
+        b.score
+            .cmp(&a.score)
             .then_with(|| a.command.canonical.len().cmp(&b.command.canonical.len()))
     });
 
@@ -67,8 +71,14 @@ fn score_command(cmd: &Command, tokens: &[&str], normalized: &str) -> Option<Com
             || title_lower.contains(*tok)
             || desc_lower.contains(*tok)
             || group_lower.contains(*tok)
-            || cmd.aliases.iter().any(|a| a.to_ascii_lowercase().contains(*tok))
-            || cmd.keywords.iter().any(|k| k.to_ascii_lowercase().contains(*tok))
+            || cmd
+                .aliases
+                .iter()
+                .any(|a| a.to_ascii_lowercase().contains(*tok))
+            || cmd
+                .keywords
+                .iter()
+                .any(|k| k.to_ascii_lowercase().contains(*tok))
     }) {
         return None;
     }
@@ -84,7 +94,9 @@ fn score_command(cmd: &Command, tokens: &[&str], normalized: &str) -> Option<Com
     } else if tokens.iter().all(|t| canonical_lower.contains(t)) {
         score += 3000;
     } else if tokens.iter().all(|t| {
-        cmd.aliases.iter().any(|a| a.to_ascii_lowercase().contains(t))
+        cmd.aliases
+            .iter()
+            .any(|a| a.to_ascii_lowercase().contains(t))
     }) {
         score += 2000;
     } else if tokens.iter().all(|t| title_lower.contains(t)) {
@@ -92,12 +104,17 @@ fn score_command(cmd: &Command, tokens: &[&str], normalized: &str) -> Option<Com
     } else if tokens.iter().all(|t| desc_lower.contains(t)) {
         score += 1000;
     } else if tokens.iter().all(|t| {
-        cmd.keywords.iter().any(|k| k.to_ascii_lowercase().contains(t))
+        cmd.keywords
+            .iter()
+            .any(|k| k.to_ascii_lowercase().contains(t))
     }) {
         score += 800;
     } else if tokens.iter().all(|t| group_lower.contains(t)) {
         score += 500;
     }
 
-    Some(CommandMatch { command: cmd.clone(), score })
+    Some(CommandMatch {
+        command: cmd.clone(),
+        score,
+    })
 }

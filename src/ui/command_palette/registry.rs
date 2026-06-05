@@ -88,7 +88,12 @@ pub static ALL_COMMANDS: &[Command] = &[
         title: "Open Indicators",
         description: "Navigate to the indicators screen.",
         group: CommandGroup::Navigation,
-        aliases: &["open indicators", "go indicators", "show indicators", "iocs"],
+        aliases: &[
+            "open indicators",
+            "go indicators",
+            "show indicators",
+            "iocs",
+        ],
         keywords: &["indicators", "iocs", "threat intel"],
         availability: CommandAvailability::Always,
         action: CommandAction::Navigate(Screen::Indicators),
@@ -420,7 +425,9 @@ pub static ALL_COMMANDS: &[Command] = &[
         group: CommandGroup::Notification,
         aliases: &["test discord", "discord test"],
         keywords: &["notify", "discord", "test", "webhook"],
-        availability: CommandAvailability::WhenNotificationRouteConfigured(NotificationRouteKind::Discord),
+        availability: CommandAvailability::WhenNotificationRouteConfigured(
+            NotificationRouteKind::Discord,
+        ),
         action: CommandAction::Dispatch(AppAction::NotifyTestDiscord),
     },
     Command {
@@ -431,7 +438,9 @@ pub static ALL_COMMANDS: &[Command] = &[
         group: CommandGroup::Notification,
         aliases: &["test webhook", "webhook test"],
         keywords: &["notify", "webhook", "test", "http"],
-        availability: CommandAvailability::WhenNotificationRouteConfigured(NotificationRouteKind::Webhook),
+        availability: CommandAvailability::WhenNotificationRouteConfigured(
+            NotificationRouteKind::Webhook,
+        ),
         action: CommandAction::Dispatch(AppAction::NotifyTestWebhook),
     },
     Command {
@@ -442,7 +451,9 @@ pub static ALL_COMMANDS: &[Command] = &[
         group: CommandGroup::Notification,
         aliases: &["test email", "email test", "smtp test"],
         keywords: &["notify", "email", "test", "smtp"],
-        availability: CommandAvailability::WhenNotificationRouteConfigured(NotificationRouteKind::Email),
+        availability: CommandAvailability::WhenNotificationRouteConfigured(
+            NotificationRouteKind::Email,
+        ),
         action: CommandAction::Dispatch(AppAction::NotifyTestEmail),
     },
     Command {
