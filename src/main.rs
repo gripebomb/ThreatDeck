@@ -811,7 +811,7 @@ fn format_ioc_export_csv(db: &db::Db, indicators: &[db::IndicatorRecord]) -> Str
 }
 
 fn csv_escape(value: &str) -> String {
-    if value.contains(',') || value.contains('"') || value.contains('\n') {
+    if value.contains(',') || value.contains('"') || value.contains('\n') || value.contains('\r') {
         format!("\"{}\"", value.replace('"', "\"\""))
     } else {
         value.to_string()
@@ -1290,6 +1290,8 @@ mod tests {
         assert_eq!(csv_escape("plain"), "plain");
         assert_eq!(csv_escape("two,parts"), "\"two,parts\"");
         assert_eq!(csv_escape("say \"hi\""), "\"say \"\"hi\"\"\"");
+        assert_eq!(csv_escape("line\rbreak"), "\"line\rbreak\"");
+        assert_eq!(csv_escape("crlf\r\n"), "\"crlf\r\n\"");
     }
 
     #[test]
