@@ -970,39 +970,48 @@ impl Db {
         let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
         if let Some(crit) = &filter.criticality {
-            conditions.push(format!("a.criticality = '{crit:?}'"));
+            params_vec.push(Box::new(format!("{:?}", crit)));
+            conditions.push(format!("a.criticality = ?{}", params_vec.len()));
         }
         if filter.unread_only {
             conditions.push("a.read = 0".to_string());
         }
         if let Some(tag_id) = filter.tag_id {
+            params_vec.push(Box::new(tag_id));
             conditions.push(format!(
-                "a.id IN (SELECT alert_id FROM alert_tags WHERE tag_id = {})",
-                tag_id
+                "a.id IN (SELECT alert_id FROM alert_tags WHERE tag_id = ?{})",
+                params_vec.len()
             ));
         }
         if let Some(feed_id) = filter.feed_id {
-            conditions.push(format!("a.feed_id = {}", feed_id));
+            params_vec.push(Box::new(feed_id));
+            conditions.push(format!("a.feed_id = ?{}", params_vec.len()));
         }
         if let Some(keyword_id) = filter.keyword_id {
-            conditions.push(format!("a.keyword_id = {}", keyword_id));
+            params_vec.push(Box::new(keyword_id));
+            conditions.push(format!("a.keyword_id = ?{}", params_vec.len()));
         }
         if let Some(text) = &filter.text {
             if !text.is_empty() {
-                conditions.push("(a.content_snippet LIKE ?1 OR a.title LIKE ?1 OR f.name LIKE ?1 OR k.pattern LIKE ?1)".to_string());
                 params_vec.push(Box::new(format!("%{}%", text)));
+                let idx = params_vec.len();
+                conditions.push(format!(
+                    "(a.content_snippet LIKE ?{idx} OR a.title LIKE ?{idx} OR f.name LIKE ?{idx} OR k.pattern LIKE ?{idx})"
+                ));
             }
         }
         if let Some(status) = &filter.status {
-            conditions.push(format!("a.status = '{status:?}'"));
+            params_vec.push(Box::new(format!("{:?}", status)));
+            conditions.push(format!("a.status = ?{}", params_vec.len()));
         }
         if let Some(disposition) = &filter.disposition {
-            conditions.push(format!("a.disposition = '{disposition:?}'"));
+            params_vec.push(Box::new(format!("{:?}", disposition)));
+            conditions.push(format!("a.disposition = ?{}", params_vec.len()));
         }
         if let Some(owner) = &filter.owner {
             if !owner.is_empty() {
-                conditions.push("a.owner LIKE ?".to_string());
                 params_vec.push(Box::new(format!("%{}%", owner)));
+                conditions.push(format!("a.owner LIKE ?{}", params_vec.len()));
             }
         }
         if filter.open_only {
@@ -1018,6 +1027,10 @@ impl Db {
             format!("WHERE {}", conditions.join(" AND "))
         };
 
+        let limit = filter.limit.unwrap_or(500);
+        params_vec.push(Box::new(limit));
+        let limit_idx = params_vec.len();
+
         let sql = format!(
             "SELECT a.id, a.feed_id, a.keyword_id, a.title, a.content_snippet, a.criticality, a.read, a.content_hash, a.detected_at, a.metadata_json,
                     a.status, a.disposition, a.severity_override, a.confidence_score, a.owner, a.triage_notes,
@@ -1026,14 +1039,12 @@ impl Db {
              FROM alerts a
              JOIN feeds f ON a.feed_id = f.id
              JOIN keywords k ON a.keyword_id = k.id
-             {} ORDER BY a.detected_at DESC LIMIT ?1",
-            where_clause
+             {} ORDER BY a.detected_at DESC LIMIT ?{}",
+            where_clause, limit_idx
         );
 
-        let limit = filter.limit.unwrap_or(500);
         let mut stmt = self.conn.prepare(&sql)?;
-        let mut refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
-        refs.push(&limit);
+        let refs: Vec<&dyn rusqlite::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
         let rows = stmt.query_map(
             rusqlite::params_from_iter(refs),
             Self::row_to_alert_with_meta,
@@ -3555,6 +3566,220 @@ mod tests {
         assert!(event_types.contains(&"disposition_changed"));
         assert!(event_types.contains(&"closed"));
         assert!(event_types.contains(&"reopened"));
+    }
+
+    #[test]
+    fn list_alerts_filters_use_bound_parameters() {
+        let db = memory_db();
+        db.init_schema().unwrap();
+        db.conn.execute("DELETE FROM alerts", []).unwrap();
+        db.conn.execute("DELETE FROM alert_tags", []).unwrap();
+
+        let feed_id = db
+            .create_feed(&FeedCreate {
+                name: "Filter Feed".into(),
+                url: "https://filter.test/feed.xml".into(),
+                feed_type: FeedType::Rss,
+                enabled: true,
+                interval_secs: 300,
+                ..FeedCreate::default()
+            })
+            .unwrap();
+        let other_feed_id = db
+            .create_feed(&FeedCreate {
+                name: "Other Feed".into(),
+                url: "https://other.test/feed.xml".into(),
+                feed_type: FeedType::Rss,
+                enabled: true,
+                interval_secs: 300,
+                ..FeedCreate::default()
+            })
+            .unwrap();
+
+        let keyword_id = db
+            .create_keyword(&KeywordCreate {
+                pattern: "breach".into(),
+                criticality: Criticality::High,
+                enabled: true,
+                ..KeywordCreate::default()
+            })
+            .unwrap();
+        let other_keyword_id = db
+            .create_keyword(&KeywordCreate {
+                pattern: "phishing".into(),
+                criticality: Criticality::Medium,
+                enabled: true,
+                ..KeywordCreate::default()
+            })
+            .unwrap();
+
+        let tag_id = db
+            .create_tag(&TagCreate {
+                name: "critical".into(),
+                color: "#ff0000".into(),
+                description: None,
+            })
+            .unwrap();
+
+        let high_id = db
+            .create_alert(&AlertCreate {
+                feed_id,
+                keyword_id,
+                title: Some("High breach alert".into()),
+                content_snippet: "Sensitive data breach content".into(),
+                criticality: Criticality::High,
+                content_hash: "high-hash".into(),
+                metadata_json: None,
+            })
+            .unwrap();
+        db.assign_tag_to_alert(high_id, tag_id).unwrap();
+        db.assign_alert_owner(high_id, Some("alice"), Some("assigned to alice"))
+            .unwrap();
+        db.update_alert_status(high_id, AlertStatus::Acknowledged, None)
+            .unwrap();
+        db.update_alert_disposition(high_id, AlertDisposition::ConfirmedThreat, None)
+            .unwrap();
+
+        let medium_id = db
+            .create_alert(&AlertCreate {
+                feed_id: other_feed_id,
+                keyword_id: other_keyword_id,
+                title: Some("Medium phishing alert".into()),
+                content_snippet: "Phishing email content".into(),
+                criticality: Criticality::Medium,
+                content_hash: "medium-hash".into(),
+                metadata_json: None,
+            })
+            .unwrap();
+        db.update_alert_status(medium_id, AlertStatus::Closed, Some("Verified benign"))
+            .unwrap();
+        db.update_alert_disposition(medium_id, AlertDisposition::Benign, None)
+            .unwrap();
+
+        // Default returns both, most-recent first.
+        let all = db.list_alerts(&AlertFilter::default()).unwrap();
+        assert_eq!(all.len(), 2);
+
+        // criticality
+        let high = db
+            .list_alerts(&AlertFilter {
+                criticality: Some(Criticality::High),
+                ..AlertFilter::default()
+            })
+            .unwrap();
+        assert_eq!(high.len(), 1);
+        assert_eq!(high[0].alert.id, high_id);
+
+        // feed_id
+        let by_feed = db
+            .list_alerts(&AlertFilter {
+                feed_id: Some(other_feed_id),
+                ..AlertFilter::default()
+            })
+            .unwrap();
+        assert_eq!(by_feed.len(), 1);
+        assert_eq!(by_feed[0].alert.id, medium_id);
+
+        // keyword_id
+        let by_keyword = db
+            .list_alerts(&AlertFilter {
+                keyword_id: Some(keyword_id),
+                ..AlertFilter::default()
+            })
+            .unwrap();
+        assert_eq!(by_keyword.len(), 1);
+        assert_eq!(by_keyword[0].alert.id, high_id);
+
+        // tag_id
+        let by_tag = db
+            .list_alerts(&AlertFilter {
+                tag_id: Some(tag_id),
+                ..AlertFilter::default()
+            })
+            .unwrap();
+        assert_eq!(by_tag.len(), 1);
+        assert_eq!(by_tag[0].alert.id, high_id);
+
+        // status
+        let by_status = db
+            .list_alerts(&AlertFilter {
+                status: Some(AlertStatus::Closed),
+                ..AlertFilter::default()
+            })
+            .unwrap();
+        assert_eq!(by_status.len(), 1);
+        assert_eq!(by_status[0].alert.id, medium_id);
+
+        // disposition
+        let by_disp = db
+            .list_alerts(&AlertFilter {
+                disposition: Some(AlertDisposition::ConfirmedThreat),
+                ..AlertFilter::default()
+            })
+            .unwrap();
+        assert_eq!(by_disp.len(), 1);
+        assert_eq!(by_disp[0].alert.id, high_id);
+
+        // owner
+        let by_owner = db
+            .list_alerts(&AlertFilter {
+                owner: Some("alice".into()),
+                ..AlertFilter::default()
+            })
+            .unwrap();
+        assert_eq!(by_owner.len(), 1);
+        assert_eq!(by_owner[0].alert.id, high_id);
+
+        // text search across multiple columns
+        let by_text = db
+            .list_alerts(&AlertFilter {
+                text: Some("phishing".into()),
+                ..AlertFilter::default()
+            })
+            .unwrap();
+        assert_eq!(by_text.len(), 1);
+        assert_eq!(by_text[0].alert.id, medium_id);
+
+        // combined filter: text + status + limit
+        let combined = db
+            .list_alerts(&AlertFilter {
+                text: Some("phishing".into()),
+                status: Some(AlertStatus::Closed),
+                limit: Some(5),
+                ..AlertFilter::default()
+            })
+            .unwrap();
+        assert_eq!(combined.len(), 1);
+        assert_eq!(combined[0].alert.id, medium_id);
+
+        // open_only / closed_only
+        let open_only = db
+            .list_alerts(&AlertFilter {
+                open_only: true,
+                ..AlertFilter::default()
+            })
+            .unwrap();
+        assert_eq!(open_only.len(), 1);
+        assert_eq!(open_only[0].alert.id, high_id);
+
+        let closed_only = db
+            .list_alerts(&AlertFilter {
+                closed_only: true,
+                ..AlertFilter::default()
+            })
+            .unwrap();
+        assert_eq!(closed_only.len(), 1);
+        assert_eq!(closed_only[0].alert.id, medium_id);
+
+        // limit is respected (combined with text to exercise parameter numbering)
+        let limited = db
+            .list_alerts(&AlertFilter {
+                text: Some("alert".into()),
+                limit: Some(1),
+                ..AlertFilter::default()
+            })
+            .unwrap();
+        assert_eq!(limited.len(), 1);
     }
 }
 
