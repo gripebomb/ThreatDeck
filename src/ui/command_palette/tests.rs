@@ -163,8 +163,10 @@ fn multi_token_match() {
 
 #[test]
 fn open_fuzzy_clears_input() {
-    let mut state = CommandPaletteState::default();
-    state.input = "previous".to_string();
+    let mut state = CommandPaletteState {
+        input: "previous".to_string(),
+        ..CommandPaletteState::default()
+    };
     state.open_fuzzy();
     assert!(state.is_open);
     assert_eq!(state.mode, PaletteMode::Fuzzy);

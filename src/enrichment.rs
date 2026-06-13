@@ -1,3 +1,4 @@
+use crate::config::TlsTrustStore;
 use crate::db::Db;
 use anyhow::{Context, Result};
 use sentinel_enrichment::{
@@ -11,8 +12,13 @@ pub struct EnrichmentWorker {
     providers: HashMap<String, Arc<dyn EnrichmentProvider>>,
 }
 
-pub async fn run_enrichment_once(db: &Db, cache_dir: &Path, limit: i64) -> Result<usize> {
-    let worker = EnrichmentWorker::from_cache_dir(cache_dir)?;
+pub async fn run_enrichment_once(
+    db: &Db,
+    cache_dir: &Path,
+    limit: i64,
+    tls_trust_store: TlsTrustStore,
+) -> Result<usize> {
+    let worker = EnrichmentWorker::from_cache_dir(cache_dir, tls_trust_store)?;
     worker.process_pending(db, limit).await
 }
 
@@ -25,7 +31,7 @@ impl EnrichmentWorker {
         Self { providers }
     }
 
-    pub fn from_cache_dir(cache_dir: &Path) -> Result<Self> {
+    pub fn from_cache_dir(cache_dir: &Path, tls_trust_store: TlsTrustStore) -> Result<Self> {
         let mut providers: Vec<Arc<dyn EnrichmentProvider>> = Vec::new();
         let cisa_kev_path = cache_dir.join("cisa-kev.json");
         if cisa_kev_path.exists() {
@@ -34,7 +40,11 @@ impl EnrichmentWorker {
                     .with_context(|| format!("loading {}", cisa_kev_path.display()))?,
             ));
         }
-        providers.push(Arc::new(UrlHausProvider::new()));
+        providers.push(Arc::new(UrlHausProvider::with_client(Arc::new(
+            sentinel_enrichment::UreqUrlHausHttpClient::with_agent(crate::http::agent(
+                tls_trust_store,
+            )?),
+        ))));
         Ok(Self::new(providers))
     }
 
@@ -304,7 +314,7 @@ mod tests {
             .unwrap();
         db.queue_enrichment_job(indicator_id, provider_id, 100)
             .unwrap();
-        let worker = EnrichmentWorker::from_cache_dir(&cache_dir).unwrap();
+        let worker = EnrichmentWorker::from_cache_dir(&cache_dir, TlsTrustStore::Bundled).unwrap();
 
         let processed = runtime.block_on(worker.process_pending(&db, 5)).unwrap();
 
@@ -358,7 +368,12 @@ mod tests {
             .unwrap();
 
         let processed = runtime
-            .block_on(run_enrichment_once(&db, &cache_dir, 5))
+            .block_on(run_enrichment_once(
+                &db,
+                &cache_dir,
+                5,
+                TlsTrustStore::Bundled,
+            ))
             .unwrap();
 
         assert_eq!(processed, 1);

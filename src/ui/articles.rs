@@ -169,7 +169,7 @@ fn open_selected_article(app: &mut App) {
 
     if needs_full_text {
         if let Some(url) = url.as_deref().filter(|url| !url.trim().is_empty()) {
-            match crate::article::fetch_article_text(url) {
+            match crate::article::fetch_article_text(url, app.config.network.tls_trust_store) {
                 Ok(content) => {
                     if let Err(e) = app.db.cache_feed_item_content(article_id, &content) {
                         app.set_notification(

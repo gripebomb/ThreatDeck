@@ -1,4 +1,5 @@
 use crate::alert::AlertEngine;
+use crate::config::TlsTrustStore;
 use crate::db::Db;
 use crate::feed::FeedManager;
 use std::path::PathBuf;
@@ -37,6 +38,7 @@ impl AutoFetcher {
     pub fn spawn(
         db_path: PathBuf,
         interval_minutes: u32,
+        tls_trust_store: TlsTrustStore,
         tx: mpsc::Sender<AutoFetchMessage>,
     ) -> Self {
         let (stop_tx, stop_rx) = mpsc::channel::<()>();
@@ -115,7 +117,8 @@ impl AutoFetcher {
                             None => None,
                         };
 
-                        let outcome = FeedManager::run_fetch_attempt(feed, template);
+                        let outcome =
+                            FeedManager::run_fetch_attempt(feed, template, tls_trust_store);
                         match outcome.result {
                             Some(result) => {
                                 let _ = db.record_feed_fetch_outcome(
@@ -213,7 +216,7 @@ mod tests {
 
         let (tx, rx) = mpsc::channel();
         // Use a long interval so the thread doesn't do work before we stop it
-        let fetcher = AutoFetcher::spawn(db_path.clone(), 9999, tx);
+        let fetcher = AutoFetcher::spawn(db_path.clone(), 9999, TlsTrustStore::Bundled, tx);
         fetcher.stop();
 
         // We may get a Completed message first (DB open failed or empty feeds),

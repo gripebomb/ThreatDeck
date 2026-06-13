@@ -10,7 +10,7 @@ mod cisa_kev;
 mod urlhaus;
 
 pub use cisa_kev::CisaKevProvider;
-pub use urlhaus::UrlHausProvider;
+pub use urlhaus::{UreqUrlHausHttpClient, UrlHausProvider};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Reputation {

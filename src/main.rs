@@ -9,6 +9,7 @@ mod config;
 mod db;
 mod enrichment;
 mod feed;
+mod http;
 mod keyword;
 mod notify;
 mod report;
@@ -206,6 +207,7 @@ fn main() -> Result<()> {
             &db,
             &paths.data_dir,
             cli.enrich_limit,
+            app_config.network.tls_trust_store,
         ))?;
         println!("Processed {processed} enrichment job(s).");
         return Ok(());
@@ -480,8 +482,8 @@ fn main() -> Result<()> {
             println!("No alerts found.");
         } else {
             println!(
-                "{:>6} {:>8} {:>12} {:>14} {:>12} {:>20} {}",
-                "ID", "Severity", "Status", "Disposition", "Owner", "Detected", "Title"
+                "{:>6} {:>8} {:>12} {:>14} {:>12} {:>20} Title",
+                "ID", "Severity", "Status", "Disposition", "Owner", "Detected"
             );
             for a in alerts {
                 let sev = format!("{:?}", a.alert.effective_severity());
@@ -528,7 +530,9 @@ fn debug_stored_feed(db: &db::Db, feed_id: i64) -> Result<()> {
         Some(template_id) => db.get_template(template_id)?,
         None => None,
     };
-    let outcome = feed::FeedManager::run_fetch_attempt(&feed, template);
+    let app_config = config::load_app_config(&config::Paths::new()?.config_file)?;
+    let outcome =
+        feed::FeedManager::run_fetch_attempt(&feed, template, app_config.network.tls_trust_store);
     let content_hash = outcome
         .result
         .as_ref()
@@ -564,7 +568,11 @@ fn check_feed_url(url: &str) {
         custom_headers: None,
         tor_proxy: None,
     };
-    let outcome = feed::FeedManager::run_fetch_attempt(&feed, None);
+    let app_config = config::Paths::new()
+        .and_then(|paths| config::load_app_config(&paths.config_file))
+        .unwrap_or_default();
+    let outcome =
+        feed::FeedManager::run_fetch_attempt(&feed, None, app_config.network.tls_trust_store);
     print!("{}", format_feed_diagnostic_report(None, &outcome.attempt));
 }
 
@@ -915,7 +923,7 @@ fn seed_demo_data(db: &db::Db) -> Result<()> {
     use crate::types::{Criticality, FeedStatus, FeedType};
 
     // ── Feeds ───────────────────────────────────────────────────────────────
-    let feed_ids = vec![
+    let feed_ids = [
         db.create_feed(&FeedCreate {
             name: "Ransomfeed.it Tracker".into(),
             url: "https://api.ransomfeed.it/v1/posts".into(),
@@ -985,7 +993,7 @@ fn seed_demo_data(db: &db::Db) -> Result<()> {
     ];
 
     // ── Keywords ────────────────────────────────────────────────────────────
-    let keyword_ids = vec![
+    let keyword_ids = [
         db.create_keyword(&KeywordCreate {
             pattern: "ransomware".into(),
             is_regex: false,

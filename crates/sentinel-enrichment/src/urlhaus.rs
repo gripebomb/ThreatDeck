@@ -27,8 +27,24 @@ pub trait UrlHausHttpClient: Send + Sync {
     ) -> Result<Value, EnrichmentError>;
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct UreqUrlHausHttpClient;
+#[derive(Debug, Clone)]
+pub struct UreqUrlHausHttpClient {
+    agent: ureq::Agent,
+}
+
+impl Default for UreqUrlHausHttpClient {
+    fn default() -> Self {
+        Self {
+            agent: ureq::AgentBuilder::new().build(),
+        }
+    }
+}
+
+impl UreqUrlHausHttpClient {
+    pub fn with_agent(agent: ureq::Agent) -> Self {
+        Self { agent }
+    }
+}
 
 impl UrlHausHttpClient for UreqUrlHausHttpClient {
     fn post_form(
@@ -37,7 +53,8 @@ impl UrlHausHttpClient for UreqUrlHausHttpClient {
         auth_key: &str,
         form: &[(&str, &str)],
     ) -> Result<Value, EnrichmentError> {
-        ureq::post(url)
+        self.agent
+            .post(url)
             .set("Auth-Key", auth_key)
             .send_form(form)
             .map_err(|err| EnrichmentError::Provider(format!("URLHaus request failed: {err}")))?
@@ -63,7 +80,7 @@ impl Default for UrlHausProvider {
 impl UrlHausProvider {
     pub fn new() -> Self {
         Self {
-            client: Arc::new(UreqUrlHausHttpClient),
+            client: Arc::new(UreqUrlHausHttpClient::default()),
             base_url: DEFAULT_BASE_URL.to_string(),
         }
     }

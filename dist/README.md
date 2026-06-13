@@ -139,6 +139,9 @@ alert_retention_days = 30         # Auto-delete alerts older than N days
 dashboard_refresh_secs = 30       # Dashboard data refresh interval
 tick_rate_ms = 250                # UI tick rate (lower = more responsive)
 max_health_log_entries = 100      # Maximum feed health log entries to retain
+
+[network]
+tls_trust_store = "bundled"       # "bundled" uses bundled Mozilla roots; "os" uses the OS certificate store
 ```
 
 ### Theme Settings

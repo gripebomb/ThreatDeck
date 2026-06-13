@@ -1,3 +1,4 @@
+use crate::config::TlsTrustStore;
 use crate::types::{Feed, FeedResult, FetchedFeedItem};
 use anyhow::{Context, Result};
 
@@ -14,10 +15,10 @@ use anyhow::{Context, Result};
 pub struct OnionFetcher;
 
 impl crate::feed::FeedFetcher for OnionFetcher {
-    fn fetch(&self, feed: &Feed) -> Result<FeedResult> {
+    fn fetch(&self, feed: &Feed, tls_trust_store: TlsTrustStore) -> Result<FeedResult> {
         let proxy_url = feed.tor_proxy.as_deref().unwrap_or("http://127.0.0.1:8118");
 
-        let agent = ureq::AgentBuilder::new()
+        let agent = crate::http::agent_builder(tls_trust_store)?
             .timeout(std::time::Duration::from_secs(120))
             .proxy(ureq::Proxy::new(proxy_url).context("invalid proxy URL")?)
             .build();

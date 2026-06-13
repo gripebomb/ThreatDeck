@@ -16,6 +16,7 @@ pub struct AppConfig {
     pub enrichment: EnrichmentConfig,
     pub triage: TriageConfig,
     pub auto_fetch: AutoFetchConfig,
+    pub network: NetworkConfig,
     pub reports: ReportConfig,
 }
 
@@ -31,8 +32,46 @@ impl Default for AppConfig {
             enrichment: EnrichmentConfig::default(),
             triage: TriageConfig::default(),
             auto_fetch: AutoFetchConfig::default(),
+            network: NetworkConfig::default(),
             reports: ReportConfig::default(),
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NetworkConfig {
+    pub tls_trust_store: TlsTrustStore,
+}
+
+impl Default for NetworkConfig {
+    fn default() -> Self {
+        Self {
+            tls_trust_store: TlsTrustStore::Bundled,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TlsTrustStore {
+    Bundled,
+    Os,
+}
+
+impl TlsTrustStore {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Bundled => "bundled",
+            Self::Os => "os",
+        }
+    }
+
+    pub fn toggle(&mut self) {
+        *self = match self {
+            Self::Bundled => Self::Os,
+            Self::Os => Self::Bundled,
+        };
     }
 }
 
@@ -228,5 +267,37 @@ interval_minutes = 30
         .unwrap();
         assert!(!config.auto_fetch.enabled);
         assert_eq!(config.auto_fetch.interval_minutes, 30);
+    }
+
+    #[test]
+    fn network_config_defaults_to_bundled_roots() {
+        let config: AppConfig = toml::from_str("").unwrap();
+        assert_eq!(config.network.tls_trust_store, TlsTrustStore::Bundled);
+    }
+
+    #[test]
+    fn network_config_parses_os_trust_store() {
+        let config: AppConfig = toml::from_str(
+            r#"
+[network]
+tls_trust_store = "os"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.network.tls_trust_store, TlsTrustStore::Os);
+    }
+
+    #[test]
+    fn network_config_rejects_unknown_trust_store() {
+        let err = toml::from_str::<AppConfig>(
+            r#"
+[network]
+tls_trust_store = "anything"
+"#,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("unknown variant"));
     }
 }

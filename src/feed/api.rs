@@ -1,3 +1,4 @@
+use crate::config::TlsTrustStore;
 use crate::types::{ApiTemplate, Feed, FeedResult, FetchedFeedItem};
 use anyhow::{Context, Result};
 
@@ -12,8 +13,9 @@ impl ApiFetcher {
 }
 
 impl crate::feed::FeedFetcher for ApiFetcher {
-    fn fetch(&self, feed: &Feed) -> Result<FeedResult> {
-        let mut request = ureq::get(&feed.url);
+    fn fetch(&self, feed: &Feed, tls_trust_store: TlsTrustStore) -> Result<FeedResult> {
+        let agent = crate::http::agent(tls_trust_store)?;
+        let mut request = agent.get(&feed.url);
 
         if let Some(key) = &feed.api_key {
             request = request.set("Authorization", &format!("Bearer {}", key));

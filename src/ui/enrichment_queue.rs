@@ -168,6 +168,7 @@ fn process_enrichment_queue(app: &mut App) {
         &app.db,
         &app.paths.data_dir,
         10,
+        app.config.network.tls_trust_store,
     )) {
         Ok(processed) => {
             app.refresh_enrichment_queue();

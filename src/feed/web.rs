@@ -1,3 +1,4 @@
+use crate::config::TlsTrustStore;
 use crate::types::{Feed, FeedResult, FetchedFeedItem};
 use anyhow::{Context, Result};
 use scraper::{Html, Selector};
@@ -5,8 +6,9 @@ use scraper::{Html, Selector};
 pub struct WebFetcher;
 
 impl crate::feed::FeedFetcher for WebFetcher {
-    fn fetch(&self, feed: &Feed) -> Result<FeedResult> {
-        let body = ureq::get(&feed.url)
+    fn fetch(&self, feed: &Feed, tls_trust_store: TlsTrustStore) -> Result<FeedResult> {
+        let body = crate::http::agent(tls_trust_store)?
+            .get(&feed.url)
             .call()
             .context("Website fetch failed")?
             .into_string()

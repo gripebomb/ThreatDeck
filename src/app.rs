@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use crate::auto_fetch::{AutoFetchMessage, AutoFetcher};
-use crate::config::{AppConfig, Paths};
+use crate::config::{AppConfig, Paths, TlsTrustStore};
 use crate::db::{
     AlertFilter, Db, EnrichmentJobWithContext, EnrichmentProviderRecord, IndicatorRecord,
     IndicatorSearch,
@@ -137,6 +137,7 @@ pub struct App {
 
     pub auto_fetcher: Option<AutoFetcher>,
     pub auto_fetch_rx: Option<mpsc::Receiver<AutoFetchMessage>>,
+    pub settings_tls_trust_store: TlsTrustStore,
     pub settings_auto_fetch_enabled: bool,
     pub settings_auto_fetch_interval: u32,
     pub command_palette: CommandPalette,
@@ -241,6 +242,7 @@ impl App {
             settings_cleanup_preview: None,
             auto_fetcher: None,
             auto_fetch_rx: None,
+            settings_tls_trust_store: TlsTrustStore::Bundled,
             settings_auto_fetch_enabled: false,
             settings_auto_fetch_interval: 30,
             command_palette: CommandPalette::new(),
@@ -257,12 +259,14 @@ impl App {
         app.refresh_settings();
         app.settings_auto_fetch_enabled = app.config.auto_fetch.enabled;
         app.settings_auto_fetch_interval = app.config.auto_fetch.interval_minutes;
+        app.settings_tls_trust_store = app.config.network.tls_trust_store;
 
         if app.config.auto_fetch.enabled {
             let (tx, rx) = mpsc::channel();
             let fetcher = AutoFetcher::spawn(
                 app.paths.db_file.clone(),
                 app.config.auto_fetch.interval_minutes,
+                app.config.network.tls_trust_store,
                 tx,
             );
             app.auto_fetcher = Some(fetcher);
@@ -1332,7 +1336,11 @@ impl App {
             .api_template_id
             .and_then(|id| self.db.get_template(id).ok().flatten());
 
-        let outcome = crate::feed::FeedManager::run_fetch_attempt(&feed, template);
+        let outcome = crate::feed::FeedManager::run_fetch_attempt(
+            &feed,
+            template,
+            self.config.network.tls_trust_store,
+        );
         match outcome.result {
             Some(result) => {
                 let item_count = result.items.len();
@@ -1535,6 +1543,7 @@ impl App {
         }
         self.settings_retention_days = self.config.alert_retention_days;
         self.settings_theme_name = self.config.theme.clone();
+        self.settings_tls_trust_store = self.config.network.tls_trust_store;
     }
 
     pub fn start_auto_fetch(&mut self) {
@@ -1545,6 +1554,7 @@ impl App {
         let fetcher = AutoFetcher::spawn(
             self.paths.db_file.clone(),
             self.settings_auto_fetch_interval,
+            self.settings_tls_trust_store,
             tx,
         );
         self.auto_fetcher = Some(fetcher);

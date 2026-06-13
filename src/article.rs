@@ -1,11 +1,12 @@
+use crate::config::TlsTrustStore;
 use anyhow::{Context, Result};
 use scraper::{Html, Selector};
 use std::time::Duration;
 
-pub fn fetch_article_text(url: &str) -> Result<String> {
-    let agent = ureq::AgentBuilder::new()
+pub fn fetch_article_text(url: &str, tls_trust_store: TlsTrustStore) -> Result<String> {
+    let agent = crate::http::agent_builder(tls_trust_store)?
         .timeout(Duration::from_secs(20))
-        .user_agent("ThreatDeck/0.5.0 article reader")
+        .user_agent("ThreatDeck/0.6.0 article reader")
         .build();
     let body = agent
         .get(url)

@@ -65,7 +65,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     } else if matches!(app.settings_tab, SettingsTab::Enrichment) {
         "-- NORMAL -- [1-9,0] Nav  [Tab] Tabs  [Space/e] Toggle  [t] Test provider  [r] Refresh  [?] Help  [q] Quit".to_string()
     } else {
-        "-- NORMAL -- [1-9,0] Nav  [Tab] Tabs  [Left/Right] Theme  [-/+] Interval  [f] Auto-fetch  [i/j/e/o] Toggles  [p] Preview  [s] Save  [?] Help  [q] Quit".to_string()
+        "-- NORMAL -- [1-9,0] Nav  [Tab] Tabs  [Left/Right] Theme  [c] Certs  [f] Auto-fetch  [i/j/e/o] Toggles  [s] Save  [?] Help  [q] Quit".to_string()
     };
     let status = Paragraph::new(status_text).style(Style::default().fg(app.theme.muted));
     f.render_widget(status, chunks[3]);
@@ -85,6 +85,7 @@ fn draw_general(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
             Constraint::Length(3), // preview
             Constraint::Length(3), // ioc
             Constraint::Length(3), // enrichment
+            Constraint::Length(3), // network
             Constraint::Length(3), // auto fetch
             Constraint::Length(5), // help
         ])
@@ -163,6 +164,14 @@ fn draw_general(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
     );
     f.render_widget(enrichment_para, chunks[4]);
 
+    let network_text = format!("TLS trust store: {}", app.settings_tls_trust_store.label());
+    let network_para = Paragraph::new(network_text).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(app.theme.border)),
+    );
+    f.render_widget(network_para, chunks[5]);
+
     let auto_fetch_text = format!(
         "Auto fetch: {} | Fetch interval: {} min",
         if app.settings_auto_fetch_enabled {
@@ -177,12 +186,12 @@ fn draw_general(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(app.theme.border)),
     );
-    f.render_widget(auto_fetch_para, chunks[5]);
+    f.render_widget(auto_fetch_para, chunks[6]);
 
-    let help = Paragraph::new("Keys: [Left/Right/Space] Theme  [-/+] Interval  [f] Auto-fetch  [i/j/e/o] Toggles  [p] Preview  [s] Save")
+    let help = Paragraph::new("Keys: [Left/Right/Space] Theme  [c] TLS trust  [-/+] Interval  [f] Auto-fetch  [i/j/e/o] Toggles  [p] Preview  [s] Save")
         .style(Style::default().fg(app.theme.muted))
         .alignment(ratatui::layout::Alignment::Center);
-    f.render_widget(help, chunks[6]);
+    f.render_widget(help, chunks[7]);
 }
 
 fn draw_notifications(f: &mut Frame, app: &mut App, area: ratatui::layout::Rect) {
@@ -534,6 +543,13 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
             app.config.enrichment.enrich_only_alert_indicators =
                 !app.config.enrichment.enrich_only_alert_indicators;
         }
+        KeyCode::Char('c') if matches!(app.settings_tab, SettingsTab::General) => {
+            app.settings_tls_trust_store.toggle();
+            app.set_notification(
+                format!("TLS trust store: {}", app.settings_tls_trust_store.label()),
+                crate::types::NotificationType::Info,
+            );
+        }
         KeyCode::Char('f') if matches!(app.settings_tab, SettingsTab::General) => {
             app.settings_auto_fetch_enabled = !app.settings_auto_fetch_enabled;
             if app.settings_auto_fetch_enabled {
@@ -600,11 +616,17 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
             }
         }
         KeyCode::Char('s') => {
+            let tls_trust_store_changed =
+                app.config.network.tls_trust_store != app.settings_tls_trust_store;
             app.config.theme = app.settings_theme_name.clone();
             app.config.alert_retention_days = app.settings_retention_days;
+            app.config.network.tls_trust_store = app.settings_tls_trust_store;
             app.config.auto_fetch.enabled = app.settings_auto_fetch_enabled;
             app.config.auto_fetch.interval_minutes = app.settings_auto_fetch_interval;
             app.theme = crate::theme::get_runtime_theme(&app.config.theme);
+            if tls_trust_store_changed && app.settings_auto_fetch_enabled {
+                app.restart_auto_fetch();
+            }
             let _ = crate::config::save_app_config(&app.paths.config_file, &app.config);
             app.set_notification("Settings saved".to_string(), NotificationType::Success);
         }

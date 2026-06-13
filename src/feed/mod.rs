@@ -5,11 +5,12 @@ pub mod rss;
 pub mod utils;
 pub mod web;
 
+use crate::config::TlsTrustStore;
 use crate::types::{ApiTemplate, Feed, FeedResult, FeedType};
 use anyhow::Result;
 
 pub trait FeedFetcher {
-    fn fetch(&self, feed: &Feed) -> Result<FeedResult>;
+    fn fetch(&self, feed: &Feed, tls_trust_store: TlsTrustStore) -> Result<FeedResult>;
 }
 
 pub struct FeedManager;
@@ -20,17 +21,25 @@ pub struct FeedFetchOutcome {
 }
 
 impl FeedManager {
-    pub fn fetch_feed(feed: &Feed, template: Option<ApiTemplate>) -> Result<FeedResult> {
+    pub fn fetch_feed(
+        feed: &Feed,
+        template: Option<ApiTemplate>,
+        tls_trust_store: TlsTrustStore,
+    ) -> Result<FeedResult> {
         let fetcher: Box<dyn FeedFetcher> = match feed.feed_type {
             FeedType::Api => Box::new(api::ApiFetcher::new(template)),
             FeedType::Rss => Box::new(rss::RssFetcher),
             FeedType::Website => Box::new(web::WebFetcher),
             FeedType::Onion => Box::new(onion::OnionFetcher),
         };
-        fetcher.fetch(feed)
+        fetcher.fetch(feed, tls_trust_store)
     }
 
-    pub fn run_fetch_attempt(feed: &Feed, template: Option<ApiTemplate>) -> FeedFetchOutcome {
+    pub fn run_fetch_attempt(
+        feed: &Feed,
+        template: Option<ApiTemplate>,
+        tls_trust_store: TlsTrustStore,
+    ) -> FeedFetchOutcome {
         let started = std::time::Instant::now();
         if !feed.url.starts_with("http://") && !feed.url.starts_with("https://") {
             let elapsed_ms = started.elapsed().as_millis();
@@ -62,7 +71,7 @@ impl FeedManager {
             };
         }
 
-        match Self::fetch_feed(feed, template) {
+        match Self::fetch_feed(feed, template, tls_trust_store) {
             Ok(result) => {
                 let elapsed_ms = started.elapsed().as_millis();
                 FeedFetchOutcome {
@@ -136,7 +145,8 @@ mod tests {
             tor_proxy: None,
         };
 
-        let outcome = FeedManager::run_fetch_attempt(&feed, None);
+        let outcome =
+            FeedManager::run_fetch_attempt(&feed, None, crate::config::TlsTrustStore::Bundled);
         assert!(outcome.result.is_none());
         let diagnostic = outcome.attempt.diagnostic.unwrap();
         assert_eq!(diagnostic.phase, FetchFailurePhase::UrlValidation);

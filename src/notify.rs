@@ -1,3 +1,4 @@
+use crate::config::TlsTrustStore;
 use crate::db::Db;
 use crate::types::*;
 use anyhow::{Context, Result};
@@ -6,7 +7,13 @@ use serde_json::Value;
 pub struct NotifyEngine;
 
 impl NotifyEngine {
-    pub fn send_for_alert(db: &Db, alert: &Alert, feed: &Feed, keyword: &Keyword) -> Result<()> {
+    pub fn send_for_alert(
+        db: &Db,
+        alert: &Alert,
+        feed: &Feed,
+        keyword: &Keyword,
+        tls_trust_store: TlsTrustStore,
+    ) -> Result<()> {
         let configs = db.list_notifications()?;
         let context = AlertNotificationContext::from_db(db, alert)?;
         for cfg in configs {
@@ -22,10 +29,10 @@ impl NotifyEngine {
                     Self::send_email(&cfg, alert, feed, keyword, &context)
                 }
                 NotificationChannel::Webhook => {
-                    Self::send_webhook(&cfg, alert, feed, keyword, &context)
+                    Self::send_webhook(&cfg, alert, feed, keyword, &context, tls_trust_store)
                 }
                 NotificationChannel::Discord => {
-                    Self::send_discord(&cfg, alert, feed, keyword, &context)
+                    Self::send_discord(&cfg, alert, feed, keyword, &context, tls_trust_store)
                 }
             };
 
@@ -72,13 +79,15 @@ impl NotifyEngine {
         feed: &Feed,
         keyword: &Keyword,
         context: &AlertNotificationContext,
+        tls_trust_store: TlsTrustStore,
     ) -> Result<()> {
         let webhook_cfg: WebhookConfig =
             serde_json::from_str(&cfg.config_json).context("parsing webhook config")?;
 
         let payload = webhook_payload(alert, feed, keyword, context);
 
-        let mut request = ureq::post(&webhook_cfg.url);
+        let agent = crate::http::agent(tls_trust_store)?;
+        let mut request = agent.post(&webhook_cfg.url);
         for (k, v) in &webhook_cfg.headers {
             request = request.set(k, v);
         }
@@ -93,13 +102,15 @@ impl NotifyEngine {
         feed: &Feed,
         keyword: &Keyword,
         context: &AlertNotificationContext,
+        tls_trust_store: TlsTrustStore,
     ) -> Result<()> {
         let discord_cfg: DiscordConfig =
             serde_json::from_str(&cfg.config_json).context("parsing discord config")?;
 
         let payload = discord_payload(alert, feed, keyword, context);
 
-        ureq::post(&discord_cfg.webhook_url)
+        crate::http::agent(tls_trust_store)?
+            .post(&discord_cfg.webhook_url)
             .send_json(payload)
             .context("Discord webhook failed")?;
         Ok(())

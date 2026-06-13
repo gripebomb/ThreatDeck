@@ -86,7 +86,7 @@ pub fn render_alert_report(report: &AlertReport, options: &ReportExportOptions) 
                 "| {} | {} | {} | {} |\n",
                 escape_table_cell(&indicator.indicator_type),
                 escape_table_cell(&indicator.normalized_value),
-                escape_table_cell(&indicator.reputation.as_deref().unwrap_or("Unknown")),
+                escape_table_cell(indicator.reputation.as_deref().unwrap_or("Unknown")),
                 indicator
                     .risk_score
                     .map(|s| s.to_string())
@@ -105,8 +105,8 @@ pub fn render_alert_report(report: &AlertReport, options: &ReportExportOptions) 
             out.push_str(&format!(
                 "| {} | {} | {} |\n\n",
                 escape_table_cell(&result.provider),
-                escape_table_cell(&result.verdict.as_deref().unwrap_or("-")),
-                escape_table_cell(&result.summary.as_deref().unwrap_or("-")),
+                escape_table_cell(result.verdict.as_deref().unwrap_or("-")),
+                escape_table_cell(result.summary.as_deref().unwrap_or("-")),
             ));
         }
     }
@@ -125,10 +125,10 @@ pub fn render_alert_report(report: &AlertReport, options: &ReportExportOptions) 
                 "| {} | {} | {} | {} | {} | {} |\n",
                 escape_table_cell(&event.time),
                 escape_table_cell(&event.event_type),
-                escape_table_cell(&event.old_value.as_deref().unwrap_or("")),
-                escape_table_cell(&event.new_value.as_deref().unwrap_or("")),
-                escape_table_cell(&event.actor.as_deref().unwrap_or("")),
-                escape_table_cell(&event.note.as_deref().unwrap_or("")),
+                escape_table_cell(event.old_value.as_deref().unwrap_or("")),
+                escape_table_cell(event.new_value.as_deref().unwrap_or("")),
+                escape_table_cell(event.actor.as_deref().unwrap_or("")),
+                escape_table_cell(event.note.as_deref().unwrap_or("")),
             ));
         }
         out.push('\n');
@@ -256,9 +256,9 @@ pub fn render_feed_health_report(report: &FeedHealthReport) -> String {
                 escape_table_cell(&feed.feed_type),
                 escape_table_cell(&feed.status),
                 feed.consecutive_failures,
-                escape_table_cell(&feed.last_fetch_at.as_deref().unwrap_or("-")),
-                escape_table_cell(&feed.last_success_at.as_deref().unwrap_or("-")),
-                escape_table_cell(&feed.last_error.as_deref().unwrap_or("-")),
+                escape_table_cell(feed.last_fetch_at.as_deref().unwrap_or("-")),
+                escape_table_cell(feed.last_success_at.as_deref().unwrap_or("-")),
+                escape_table_cell(feed.last_error.as_deref().unwrap_or("-")),
             ));
         }
         out.push('\n');
