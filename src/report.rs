@@ -33,11 +33,9 @@ impl ReportService {
         let report = self.build_alert_report(&data, options)?;
         let markdown = render_alert_report(&report, options);
 
-        let filename = options
-            .output_path
-            .as_ref()
-            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
-            .unwrap_or_else(|| generate_filename(ReportType::Alert, Some(alert_id), None));
+        let filename = validated_report_filename(options.output_path.as_ref(), || {
+            generate_filename(ReportType::Alert, Some(alert_id), None)
+        })?;
 
         let output_path = export_dir.join(&filename);
 
@@ -73,11 +71,9 @@ impl ReportService {
         let report = self.build_alert_collection_report(db, alerts, filter, options)?;
         let markdown = render_alert_collection_report(&report);
 
-        let filename = options
-            .output_path
-            .as_ref()
-            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
-            .unwrap_or_else(|| generate_filename(ReportType::AlertCollection, None, None));
+        let filename = validated_report_filename(options.output_path.as_ref(), || {
+            generate_filename(ReportType::AlertCollection, None, None)
+        })?;
 
         let output_path = export_dir.join(&filename);
 
@@ -112,11 +108,9 @@ impl ReportService {
         let report = self.build_feed_health_report(&feeds)?;
         let markdown = render_feed_health_report(&report);
 
-        let filename = options
-            .output_path
-            .as_ref()
-            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
-            .unwrap_or_else(|| generate_filename(ReportType::FeedHealth, None, None));
+        let filename = validated_report_filename(options.output_path.as_ref(), || {
+            generate_filename(ReportType::FeedHealth, None, None)
+        })?;
 
         let output_path = export_dir.join(&filename);
 
@@ -367,9 +361,195 @@ impl ReportService {
         })
     }
 }
+fn validated_report_filename(
+    output_path: Option<&std::path::PathBuf>,
+    default: impl FnOnce() -> String,
+) -> Result<String> {
+    let filename = match output_path {
+        Some(p) => p
+            .file_name()
+            .ok_or_else(|| threatdeck_report::ReportError::InvalidExportPath(p.to_path_buf()))?
+            .to_string_lossy()
+            .to_string(),
+        None => default(),
+    };
+
+    for component in std::path::Path::new(&filename).components() {
+        if !matches!(component, std::path::Component::Normal(_)) {
+            return Err(threatdeck_report::ReportError::InvalidExportPath(
+                std::path::PathBuf::from(&filename),
+            )
+            .into());
+        }
+    }
+
+    Ok(filename)
+}
 
 impl Default for ReportService {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ReportService;
+    use crate::db::{AlertCreate, AlertFilter, Db, FeedCreate, KeywordCreate};
+    use crate::types::{Criticality, FeedType};
+    use threatdeck_report::ReportExportOptions;
+
+    fn temp_export_dir(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "threatdeck-report-test-{}-{}",
+            name,
+            std::process::id()
+        ))
+    }
+
+    fn seeded_db() -> Db {
+        let db = Db::new_in_memory_for_tests();
+        db.init_schema().unwrap();
+        let feed_id = db
+            .create_feed(&FeedCreate {
+                name: "Report Feed".into(),
+                url: "https://report.test/feed.xml".into(),
+                feed_type: FeedType::Rss,
+                enabled: true,
+                interval_secs: 300,
+                ..FeedCreate::default()
+            })
+            .unwrap();
+        let keyword_id = db
+            .create_keyword(&KeywordCreate {
+                pattern: "breach".into(),
+                criticality: Criticality::High,
+                enabled: true,
+                ..KeywordCreate::default()
+            })
+            .unwrap();
+        db.create_alert(&AlertCreate {
+            feed_id,
+            keyword_id,
+            title: Some("Report test alert".into()),
+            content_snippet: "Sensitive data breach content".into(),
+            criticality: Criticality::High,
+            content_hash: "report-hash".into(),
+            metadata_json: None,
+        })
+        .unwrap();
+        db
+    }
+
+    fn assert_invalid_export_path(err: anyhow::Error, expected_subpath: &str) {
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("Invalid export path"),
+            "expected invalid export path error, got: {msg}"
+        );
+        assert!(
+            msg.contains(expected_subpath),
+            "expected '{expected_subpath}' in error: {msg}"
+        );
+    }
+
+    #[test]
+    fn report_export_rejects_path_ending_in_dotdot() {
+        let db = seeded_db();
+        let service = ReportService::new();
+        let export_dir = temp_export_dir("dotdir-output");
+        let _ = std::fs::remove_dir_all(&export_dir);
+        std::fs::create_dir_all(&export_dir).unwrap();
+        let dotdot_path: std::path::PathBuf = export_dir.join("..");
+
+        let options = ReportExportOptions {
+            output_path: Some(dotdot_path.clone()),
+            ..ReportExportOptions::default()
+        };
+
+        let err = service
+            .export_alert_report(&db, 1, &options, &export_dir)
+            .unwrap_err();
+        assert_invalid_export_path(err, ".");
+    }
+
+    #[test]
+    fn report_export_rejects_dotdot_filename_for_alert_collection() {
+        let db = seeded_db();
+        let service = ReportService::new();
+        let export_dir = temp_export_dir("collection-dotdot-output");
+        let _ = std::fs::remove_dir_all(&export_dir);
+        std::fs::create_dir_all(&export_dir).unwrap();
+
+        let options = ReportExportOptions {
+            output_path: Some(std::path::PathBuf::from("..")),
+            ..ReportExportOptions::default()
+        };
+        let filter = AlertFilter::default();
+        let alerts = db.list_alerts(&filter).unwrap();
+
+        let err = service
+            .export_visible_alerts_report(&db, &alerts, &filter, &options, &export_dir)
+            .unwrap_err();
+        assert_invalid_export_path(err, "..");
+    }
+
+    #[test]
+    fn report_export_rejects_dotdot_filename_for_feed_health() {
+        let db = seeded_db();
+        let service = ReportService::new();
+        let export_dir = temp_export_dir("feed-health-dotdot-output");
+        let _ = std::fs::remove_dir_all(&export_dir);
+        std::fs::create_dir_all(&export_dir).unwrap();
+
+        let options = ReportExportOptions {
+            output_path: Some(std::path::PathBuf::from("..")),
+            ..ReportExportOptions::default()
+        };
+
+        let err = service
+            .export_feed_health_report(&db, &options, &export_dir)
+            .unwrap_err();
+        assert_invalid_export_path(err, "..");
+    }
+
+    #[test]
+    fn report_export_uses_custom_filename() {
+        let db = seeded_db();
+        let service = ReportService::new();
+        let export_dir = temp_export_dir("custom-filename");
+        let _ = std::fs::remove_dir_all(&export_dir);
+        std::fs::create_dir_all(&export_dir).unwrap();
+
+        let options = ReportExportOptions {
+            output_path: Some(std::path::PathBuf::from("my-report.md")),
+            ..ReportExportOptions::default()
+        };
+
+        let result = service
+            .export_alert_report(&db, 1, &options, &export_dir)
+            .unwrap();
+        assert_eq!(result.path, export_dir.join("my-report.md"));
+        assert!(result.path.exists());
+    }
+
+    #[test]
+    fn report_export_ignores_directory_components_in_output_path() {
+        let db = seeded_db();
+        let service = ReportService::new();
+        let export_dir = temp_export_dir("nested-filename");
+        let _ = std::fs::remove_dir_all(&export_dir);
+        std::fs::create_dir_all(&export_dir).unwrap();
+
+        let options = ReportExportOptions {
+            output_path: Some(std::path::PathBuf::from("subdir/report.md")),
+            ..ReportExportOptions::default()
+        };
+
+        let result = service
+            .export_alert_report(&db, 1, &options, &export_dir)
+            .unwrap();
+        assert_eq!(result.path, export_dir.join("report.md"));
+        assert!(result.path.exists());
     }
 }
