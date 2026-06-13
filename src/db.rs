@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, NaiveDateTime, Utc};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use sentinel_ioc::{ExtractedIndicator, IndicatorType};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -64,6 +64,26 @@ fn indicator_type_from_db(value: &str) -> IndicatorType {
         "CloudAccessKey" => IndicatorType::CloudAccessKey,
         _ => IndicatorType::Unknown,
     }
+}
+
+/// Maximum bound parameters SQLite will accept in a single statement.
+/// The default `SQLITE_MAX_VARIABLE_NUMBER` is 999; we keep a safe margin.
+const SQLITE_MAX_PARAMS: usize = 900;
+
+/// Compute a safe chunk size for bulk statements given the number of bound
+/// parameters per row, capped at SQLite's variable limit.
+fn chunk_size_for_columns(columns: usize) -> usize {
+    if columns == 0 {
+        return usize::MAX;
+    }
+    SQLITE_MAX_PARAMS / columns
+}
+
+/// Chunk a slice into pieces whose per-row parameter count stays below the
+/// SQLite bound-parameter limit.
+fn chunks_for_columns<T>(items: &[T], columns: usize) -> impl Iterator<Item = &[T]> {
+    let chunk_size = chunk_size_for_columns(columns);
+    items.chunks(chunk_size.max(1))
 }
 
 fn indicator_types_to_json(types: &[IndicatorType]) -> Result<String> {
@@ -596,9 +616,13 @@ impl Db {
         feed: &Feed,
         result: &FeedResult,
     ) -> Result<Vec<StoredFeedItem>> {
-        let mut stored_items = Vec::with_capacity(result.items.len());
+        if result.items.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut new_items: Vec<NewFeedItem> = Vec::with_capacity(result.items.len());
         for item in &result.items {
-            let new_item = NewFeedItem {
+            new_items.push(NewFeedItem {
                 feed_id: feed.id,
                 title: item
                     .title
@@ -612,22 +636,111 @@ impl Db {
                 published_at: item.date,
                 content_hash: feed_item_hash(feed, item),
                 metadata_json: item.raw_json.clone(),
-            };
-            let existed = self
-                .conn
-                .query_row(
-                    "SELECT 1 FROM feed_items WHERE content_hash = ?1",
-                    [&new_item.content_hash],
-                    |_| Ok(()),
-                )
-                .optional()?
-                .is_some();
-            let id = self.upsert_feed_item(&new_item)?;
-            stored_items.push(StoredFeedItem {
-                id,
-                inserted: !existed,
             });
         }
+
+        // Resolve existing IDs in batched queries.
+        let mut existing_ids: std::collections::HashSet<i64> = std::collections::HashSet::new();
+        for chunk in chunks_for_columns(&new_items, 1) {
+            let placeholders = std::iter::repeat_n("?", chunk.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                "SELECT id FROM feed_items WHERE content_hash IN ({})",
+                placeholders
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+
+            // `INSERT OR IGNORE` keeps existing rows unchanged, including
+            // `updated_at`. This is intentional: feed items are immutable once
+            // first stored; any material change is reflected in `content_hash`
+            // and therefore creates a new row.
+            let params: Vec<&dyn rusqlite::ToSql> = chunk
+                .iter()
+                .map(|item| &item.content_hash as &dyn rusqlite::ToSql)
+                .collect();
+            let rows = stmt.query_map(&*params, |row| row.get::<usize, i64>(0))?;
+            existing_ids.extend(rows.collect::<Result<Vec<_>, _>>()?);
+        }
+        // Bulk insert new items in chunks.
+        if existing_ids.len() < new_items.len() {
+            for chunk in chunks_for_columns(&new_items, 9) {
+                let mut insert_sql = String::from(
+                    "INSERT OR IGNORE INTO feed_items
+                     (feed_id, title, url, author, summary, content, published_at, content_hash, metadata_json)
+                     VALUES ",
+                );
+                let placeholders: Vec<String> = (0..chunk.len())
+                    .map(|i| {
+                        let base = i * 9;
+                        format!(
+                            "(?{},?{},?{},?{},?{},?{},?{},?{},?{})",
+                            base + 1,
+                            base + 2,
+                            base + 3,
+                            base + 4,
+                            base + 5,
+                            base + 6,
+                            base + 7,
+                            base + 8,
+                            base + 9
+                        )
+                    })
+                    .collect();
+                insert_sql.push_str(&placeholders.join(", "));
+
+                let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(chunk.len() * 9);
+                for item in chunk {
+                    params.push(Box::new(item.feed_id));
+                    params.push(Box::new(item.title.clone()));
+                    params.push(Box::new(item.url.clone()));
+                    params.push(Box::new(item.author.clone()));
+                    params.push(Box::new(item.summary.clone()));
+                    params.push(Box::new(item.content.clone()));
+                    params.push(Box::new(item.published_at.map(|dt| dt.to_rfc3339())));
+                    params.push(Box::new(item.content_hash.clone()));
+                    params.push(Box::new(item.metadata_json.clone()));
+                }
+                let param_refs: Vec<&dyn rusqlite::ToSql> =
+                    params.iter().map(|p| p.as_ref()).collect();
+                self.conn.execute(&insert_sql, &*param_refs)?;
+            }
+        }
+
+        // Resolve final IDs in batched queries.
+        let mut id_by_hash: std::collections::HashMap<String, i64> =
+            std::collections::HashMap::new();
+        for chunk in chunks_for_columns(&new_items, 1) {
+            let placeholders = std::iter::repeat_n("?", chunk.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            let sql = format!(
+                "SELECT id, content_hash FROM feed_items WHERE content_hash IN ({})",
+                placeholders
+            );
+            let mut stmt = self.conn.prepare(&sql)?;
+            let params: Vec<&dyn rusqlite::ToSql> = chunk
+                .iter()
+                .map(|item| &item.content_hash as &dyn rusqlite::ToSql)
+                .collect();
+            let rows = stmt.query_map(&*params, |row| {
+                let id: i64 = row.get(0)?;
+                let hash: String = row.get(1)?;
+                Ok((hash, id))
+            })?;
+            id_by_hash.extend(rows.collect::<Result<Vec<_>, _>>()?.into_iter());
+        }
+
+        let mut stored_items = Vec::with_capacity(new_items.len());
+        for item in &new_items {
+            let id = id_by_hash
+                .get(&item.content_hash)
+                .copied()
+                .ok_or_else(|| anyhow::anyhow!("feed item id missing after upsert"))?;
+            let inserted = !existing_ids.contains(&id);
+            stored_items.push(StoredFeedItem { id, inserted });
+        }
+
         Ok(stored_items)
     }
 
@@ -1591,10 +1704,99 @@ impl Db {
         content_item_id: Option<i64>,
         feed_id: Option<i64>,
     ) -> Result<Vec<i64>> {
+        if indicators.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Run all indicator storage steps inside a transaction so partial
+        // failures do not leave indicators, occurrences, or alert links in an
+        // inconsistent state.
+        let tx = rusqlite::Transaction::new_unchecked(&self.conn, TransactionBehavior::Deferred)?;
+
+        // Bulk upsert indicators in chunked INSERT ... VALUES statements.
+        for chunk in chunks_for_columns(indicators, 4) {
+            let mut upsert_sql = String::from(
+                "INSERT INTO indicators (indicator_type, value, normalized_value, confidence_score)
+                 VALUES ",
+            );
+            let placeholders: Vec<String> = (0..chunk.len())
+                .map(|i| {
+                    let base = i * 4;
+                    format!("(?{},?{},?{},?{})", base + 1, base + 2, base + 3, base + 4)
+                })
+                .collect();
+            upsert_sql.push_str(&placeholders.join(", "));
+            upsert_sql.push_str(
+                " ON CONFLICT(indicator_type, normalized_value) DO UPDATE SET
+                    value = excluded.value,
+                    last_seen_at = CURRENT_TIMESTAMP,
+                    sighting_count = sighting_count + 1,
+                    confidence_score = COALESCE(excluded.confidence_score, confidence_score),
+                    updated_at = CURRENT_TIMESTAMP",
+            );
+
+            let mut upsert_params: Vec<Box<dyn rusqlite::ToSql>> =
+                Vec::with_capacity(chunk.len() * 4);
+            for indicator in chunk {
+                upsert_params.push(Box::new(indicator_type_to_db(indicator.indicator_type)));
+                upsert_params.push(Box::new(indicator.value.clone()));
+                upsert_params.push(Box::new(indicator.normalized_value.clone()));
+                upsert_params.push(Box::new(indicator.confidence_hint.map(i64::from)));
+            }
+            let upsert_param_refs: Vec<&dyn rusqlite::ToSql> =
+                upsert_params.iter().map(|p| p.as_ref()).collect();
+            tx.execute(&upsert_sql, &*upsert_param_refs)?;
+        }
+
+        // Resolve IDs in chunked queries with OR conditions.
+        let mut id_by_key: std::collections::HashMap<(String, String), i64> =
+            std::collections::HashMap::new();
+        for chunk in chunks_for_columns(indicators, 2) {
+            let mut select_sql =
+                String::from("SELECT id, indicator_type, normalized_value FROM indicators WHERE ");
+            let conditions: Vec<String> = (0..chunk.len())
+                .map(|i| {
+                    let base = i * 2;
+                    format!(
+                        "(indicator_type = ?{} AND normalized_value = ?{})",
+                        base + 1,
+                        base + 2
+                    )
+                })
+                .collect();
+            select_sql.push_str(&conditions.join(" OR "));
+
+            let mut select_params: Vec<Box<dyn rusqlite::ToSql>> =
+                Vec::with_capacity(chunk.len() * 2);
+            for indicator in chunk {
+                select_params.push(Box::new(indicator_type_to_db(indicator.indicator_type)));
+                select_params.push(Box::new(indicator.normalized_value.clone()));
+            }
+            let select_param_refs: Vec<&dyn rusqlite::ToSql> =
+                select_params.iter().map(|p| p.as_ref()).collect();
+
+            let mut id_stmt = tx.prepare(&select_sql)?;
+            let rows = id_stmt.query_map(&*select_param_refs, |row| {
+                let id: i64 = row.get(0)?;
+                let indicator_type: String = row.get(1)?;
+                let normalized_value: String = row.get(2)?;
+                Ok(((indicator_type, normalized_value), id))
+            })?;
+            id_by_key.extend(rows.collect::<Result<Vec<_>, _>>()?.into_iter());
+        }
+
         let mut ids = Vec::with_capacity(indicators.len());
+        let mut occurrences: Vec<IndicatorOccurrenceCreate> = Vec::with_capacity(indicators.len());
         for indicator in indicators {
-            let indicator_id = self.upsert_indicator(indicator)?;
-            self.insert_indicator_occurrence(&IndicatorOccurrenceCreate {
+            let key = (
+                indicator_type_to_db(indicator.indicator_type).to_string(),
+                indicator.normalized_value.clone(),
+            );
+            let indicator_id = *id_by_key
+                .get(&key)
+                .ok_or_else(|| anyhow::anyhow!("indicator id missing after upsert"))?;
+            ids.push(indicator_id);
+            occurrences.push(IndicatorOccurrenceCreate {
                 indicator_id,
                 content_item_id,
                 alert_id,
@@ -1603,12 +1805,76 @@ impl Db {
                 start_offset: Some(indicator.start_offset as i64),
                 end_offset: Some(indicator.end_offset as i64),
                 surrounding_text: Some(indicator.surrounding_text.clone()),
-            })?;
-            if let Some(alert_id) = alert_id {
-                self.link_indicator_to_alert(alert_id, indicator_id)?;
-            }
-            ids.push(indicator_id);
+            });
         }
+
+        // Bulk insert occurrences in chunks.
+        for chunk in chunks_for_columns(&occurrences, 8) {
+            let mut insert_sql = String::from(
+                "INSERT INTO indicator_occurrences
+                 (indicator_id, content_item_id, alert_id, feed_id, source_field, start_offset, end_offset, surrounding_text)
+                 VALUES ",
+            );
+            let placeholders: Vec<String> = (0..chunk.len())
+                .map(|i| {
+                    let base = i * 8;
+                    format!(
+                        "(?{},?{},?{},?{},?{},?{},?{},?{})",
+                        base + 1,
+                        base + 2,
+                        base + 3,
+                        base + 4,
+                        base + 5,
+                        base + 6,
+                        base + 7,
+                        base + 8
+                    )
+                })
+                .collect();
+            insert_sql.push_str(&placeholders.join(", "));
+
+            let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(chunk.len() * 8);
+            for occ in chunk {
+                params.push(Box::new(occ.indicator_id));
+                params.push(Box::new(occ.content_item_id));
+                params.push(Box::new(occ.alert_id));
+                params.push(Box::new(occ.feed_id));
+                params.push(Box::new(occ.source_field.clone()));
+                params.push(Box::new(occ.start_offset));
+                params.push(Box::new(occ.end_offset));
+                params.push(Box::new(occ.surrounding_text.clone()));
+            }
+            let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+            tx.execute(&insert_sql, &*param_refs)?;
+        }
+
+        // Bulk link indicators to alert in chunks.
+        if let Some(alert_id) = alert_id {
+            if !ids.is_empty() {
+                for chunk in chunks_for_columns(&ids, 1) {
+                    let mut insert_sql = String::from(
+                        "INSERT OR IGNORE INTO alert_indicators (alert_id, indicator_id, relationship) VALUES ",
+                    );
+                    let placeholders: Vec<String> = (0..chunk.len())
+                        .map(|i| format!("(?1,?{},'observed')", i + 2))
+                        .collect();
+                    insert_sql.push_str(&placeholders.join(", "));
+
+                    let mut params: Vec<Box<dyn rusqlite::ToSql>> =
+                        Vec::with_capacity(chunk.len() + 1);
+                    params.push(Box::new(alert_id));
+                    for indicator_id in chunk {
+                        params.push(Box::new(*indicator_id));
+                    }
+                    let param_refs: Vec<&dyn rusqlite::ToSql> =
+                        params.iter().map(|p| p.as_ref()).collect();
+                    tx.execute(&insert_sql, &*param_refs)?;
+                }
+            }
+        }
+
+        tx.commit()?;
+
         Ok(ids)
     }
 
@@ -1901,22 +2167,140 @@ impl Db {
     }
 
     pub fn queue_enrichment_jobs_for_indicators(&self, indicator_ids: &[i64]) -> Result<Vec<i64>> {
+        if indicator_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let providers = self.list_enabled_enrichment_providers()?;
-        let mut queued = Vec::new();
+        if providers.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Load indicator types in batched queries.
+        let mut indicators_by_id: std::collections::HashMap<i64, IndicatorType> =
+            std::collections::HashMap::new();
+        for chunk in chunks_for_columns(indicator_ids, 1) {
+            let placeholders = std::iter::repeat_n("?", chunk.len())
+                .collect::<Vec<_>>()
+                .join(",");
+            let indicator_sql = format!(
+                "SELECT id, indicator_type FROM indicators WHERE id IN ({})",
+                placeholders
+            );
+            let mut indicator_stmt = self.conn.prepare(&indicator_sql)?;
+            let indicator_params: Vec<&dyn rusqlite::ToSql> =
+                chunk.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+            let indicator_rows = indicator_stmt.query_map(&*indicator_params, |row| {
+                let id: i64 = row.get(0)?;
+                let indicator_type: String = row.get(1)?;
+                Ok((id, indicator_type_from_db(&indicator_type)))
+            })?;
+            indicators_by_id.extend(indicator_rows.collect::<Result<Vec<_>, _>>()?.into_iter());
+        }
+
+        // Build candidate (indicator_id, provider_id) pairs in memory.
+        // Missing indicator IDs are silently skipped to match the original
+        // behavior; callers are expected to pass IDs that were recently stored.
+        let mut candidates: Vec<(i64, i64)> = Vec::new();
         for indicator_id in indicator_ids {
-            let Some(indicator) = self.get_indicator(*indicator_id)? else {
+            let Some(indicator_type) = indicators_by_id.get(indicator_id) else {
                 continue;
             };
             for provider in &providers {
-                if !provider.supports_types.contains(&indicator.indicator_type) {
-                    continue;
+                if provider.supports_types.contains(indicator_type) {
+                    candidates.push((*indicator_id, provider.id));
                 }
-                if self.has_fresh_enrichment_result(*indicator_id, provider.id)? {
-                    continue;
-                }
-                queued.push(self.queue_enrichment_job(*indicator_id, provider.id, 100)?);
             }
         }
+
+        if candidates.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Use a temp table so the whole batch inserts/looks up in two queries.
+        self.conn.execute_batch(
+            "CREATE TEMP TABLE IF NOT EXISTS tmp_enrichment_candidates (
+                indicator_id INTEGER NOT NULL,
+                provider_id INTEGER NOT NULL,
+                PRIMARY KEY (indicator_id, provider_id)
+            );
+            DELETE FROM tmp_enrichment_candidates;",
+        )?;
+
+        // Populate candidates in chunks.
+        for chunk in chunks_for_columns(&candidates, 2) {
+            let mut insert_sql = String::from(
+                "INSERT OR IGNORE INTO tmp_enrichment_candidates (indicator_id, provider_id) VALUES ",
+            );
+            let placeholders: Vec<String> = (0..chunk.len())
+                .map(|i| {
+                    let base = i * 2;
+                    format!("(?{},?{})", base + 1, base + 2)
+                })
+                .collect();
+            insert_sql.push_str(&placeholders.join(", "));
+
+            let mut params: Vec<Box<dyn rusqlite::ToSql>> = Vec::with_capacity(chunk.len() * 2);
+            for (indicator_id, provider_id) in chunk {
+                params.push(Box::new(*indicator_id));
+                params.push(Box::new(*provider_id));
+            }
+            let param_refs: Vec<&dyn rusqlite::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+            self.conn.execute(&insert_sql, &*param_refs)?;
+        }
+
+        // Remove candidate pairs that already have a fresh enrichment result.
+        self.conn.execute(
+            "DELETE FROM tmp_enrichment_candidates
+             WHERE EXISTS (
+                 SELECT 1 FROM enrichment_results r
+                 WHERE r.indicator_id = tmp_enrichment_candidates.indicator_id
+                   AND r.provider_id = tmp_enrichment_candidates.provider_id
+                   AND r.status = 'succeeded'
+                   AND (r.expires_at IS NULL OR r.expires_at > CURRENT_TIMESTAMP)
+             )",
+            [],
+        )?;
+
+        // Insert jobs for remaining candidates.
+        self.conn.execute(
+            "INSERT OR IGNORE INTO enrichment_jobs (indicator_id, provider_id, status, priority)
+             SELECT indicator_id, provider_id, 'pending', 100 FROM tmp_enrichment_candidates",
+            [],
+        )?;
+
+        // Resolve job IDs in one query.
+        let mut id_stmt = self.conn.prepare(
+            "SELECT j.id, j.indicator_id, j.provider_id
+             FROM enrichment_jobs j
+             JOIN tmp_enrichment_candidates c
+               ON j.indicator_id = c.indicator_id
+              AND j.provider_id = c.provider_id
+             ORDER BY j.indicator_id, j.provider_id",
+        )?;
+        let id_rows = id_stmt.query_map([], |row| {
+            let id: i64 = row.get(0)?;
+            let indicator_id: i64 = row.get(1)?;
+            let provider_id: i64 = row.get(2)?;
+            Ok((id, indicator_id, provider_id))
+        })?;
+        let jobs: Vec<(i64, i64, i64)> = id_rows.collect::<Result<Vec<_>, _>>()?;
+        let job_by_pair: std::collections::HashMap<(i64, i64), i64> = jobs
+            .into_iter()
+            .map(|(id, indicator_id, provider_id)| ((indicator_id, provider_id), id))
+            .collect();
+        let mut queued = Vec::with_capacity(candidates.len());
+        for (indicator_id, provider_id) in candidates {
+            if let Some(job_id) = job_by_pair.get(&(indicator_id, provider_id)) {
+                queued.push(*job_id);
+            }
+        }
+
+        // Best-effort cleanup of the connection-scoped temp table.
+        let _ = self
+            .conn
+            .execute_batch("DROP TABLE IF EXISTS tmp_enrichment_candidates;");
+
         Ok(queued)
     }
 
@@ -2912,6 +3296,73 @@ mod tests {
             Some("Full extracted article body")
         );
     }
+    #[test]
+    fn feed_result_items_bulk_upsert_mixed_new_and_existing() {
+        let db = memory_db();
+        db.init_schema().unwrap();
+        let feed_id = db
+            .create_feed(&FeedCreate {
+                name: "Example".into(),
+                url: "https://example.com/feed.xml".into(),
+                feed_type: FeedType::Rss,
+                enabled: true,
+                interval_secs: 300,
+                ..FeedCreate::default()
+            })
+            .unwrap();
+        let feed = db.get_feed(feed_id).unwrap().unwrap();
+
+        let result = FeedResult {
+            content_hash: "feed-hash".into(),
+            raw_content: "<rss />".into(),
+            items: vec![
+                FetchedFeedItem {
+                    title: Some("Existing article".into()),
+                    description: Some("Seen before".into()),
+                    date: Some(Utc::now()),
+                    url: Some("https://example.com/existing".into()),
+                    source: None,
+                    raw_json: None,
+                },
+                FetchedFeedItem {
+                    title: Some("New article".into()),
+                    description: Some("Fresh".into()),
+                    date: Some(Utc::now()),
+                    url: Some("https://example.com/new".into()),
+                    source: None,
+                    raw_json: None,
+                },
+            ],
+        };
+
+        let first = db.store_feed_result_items_with_ids(&feed, &result).unwrap();
+        assert_eq!(first.len(), 2);
+        assert!(first[0].inserted);
+        assert!(first[1].inserted);
+
+        // Mutate metadata that is NOT part of the content hash (author/source)
+        // to prove existing rows are immutable on re-storage. Title/url/date are
+        // hashed, so changing them would create a new item by design.
+        let mut re_storage = result.clone();
+        re_storage.items[0].source = Some("tampered source".into());
+
+        let second = db
+            .store_feed_result_items_with_ids(&feed, &re_storage)
+            .unwrap();
+        assert_eq!(second.len(), 2);
+        assert!(!second[0].inserted);
+        assert!(!second[1].inserted);
+        assert_eq!(first[0].id, second[0].id);
+        assert_eq!(first[1].id, second[1].id);
+
+        let items = db.list_feed_items(&FeedItemFilter::default()).unwrap();
+        assert_eq!(items.len(), 2);
+        let existing = items
+            .iter()
+            .find(|i| i.item.id == first[0].id)
+            .expect("existing item present");
+        assert_eq!(existing.item.author.as_deref(), None);
+    }
 
     #[test]
     fn indicators_are_upserted_linked_and_searchable() {
@@ -2988,6 +3439,78 @@ mod tests {
             .unwrap();
         assert_eq!(search_results.len(), 1);
         assert_eq!(search_results[0].id, first_id);
+    }
+    #[test]
+    fn extracted_indicators_are_stored_in_bulk() {
+        let db = memory_db();
+        db.init_schema().unwrap();
+        let feed_id = db
+            .create_feed(&FeedCreate {
+                name: "IOC Feed".into(),
+                url: "https://ioc.example.test/feed.xml".into(),
+                feed_type: FeedType::Rss,
+                enabled: true,
+                interval_secs: 300,
+                ..FeedCreate::default()
+            })
+            .unwrap();
+        let alert_id = db
+            .create_alert(&AlertCreate {
+                feed_id,
+                keyword_id: 1,
+                title: Some("Bulk test".into()),
+                content_snippet: "Bulk".into(),
+                criticality: Criticality::High,
+                content_hash: "bulk-hash".into(),
+                metadata_json: None,
+            })
+            .unwrap();
+
+        let indicators = vec![
+            sentinel_ioc::ExtractedIndicator {
+                indicator_type: IndicatorType::Domain,
+                value: "Bad.Example.NET".into(),
+                normalized_value: "bad.example.net".into(),
+                source_field: "body".into(),
+                start_offset: 0,
+                end_offset: 15,
+                surrounding_text: "bad.example.net".into(),
+                confidence_hint: Some(80),
+            },
+            sentinel_ioc::ExtractedIndicator {
+                indicator_type: IndicatorType::Sha256,
+                value: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".into(),
+                normalized_value:
+                    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".into(),
+                source_field: "body".into(),
+                start_offset: 16,
+                end_offset: 80,
+                surrounding_text: "hash".into(),
+                confidence_hint: None,
+            },
+        ];
+
+        let ids = db
+            .store_extracted_indicators(&indicators, Some(alert_id), None, Some(feed_id))
+            .unwrap();
+        assert_eq!(ids.len(), 2);
+
+        let linked = db.list_indicators_for_alert(alert_id).unwrap();
+        assert_eq!(linked.len(), 2);
+
+        let occurrences = db.list_indicator_occurrences(ids[0]).unwrap();
+        assert_eq!(occurrences.len(), 1);
+
+        // Re-storing the same indicators increments sighting_count.
+        let _ = db
+            .store_extracted_indicators(&indicators, Some(alert_id), None, Some(feed_id))
+            .unwrap();
+        let domain = linked
+            .iter()
+            .find(|i| i.normalized_value == "bad.example.net")
+            .unwrap();
+        let refreshed = db.get_indicator(domain.id).unwrap().unwrap();
+        assert_eq!(refreshed.sighting_count, 2);
     }
 
     #[test]
@@ -3292,6 +3815,83 @@ mod tests {
         db.mark_enrichment_job_succeeded(queued[0]).unwrap();
         let after_fresh_result = db.queue_enrichment_jobs_for_indicators(&[ids[0]]).unwrap();
         assert!(after_fresh_result.is_empty());
+    }
+
+    #[test]
+    fn enrichment_freshness_filter_suppresses_jobs_with_null_and_future_expiry() {
+        let db = memory_db();
+        db.init_schema().unwrap();
+
+        let indicator = sentinel_ioc::ExtractedIndicator {
+            indicator_type: IndicatorType::Domain,
+            value: "fresh.example.net".into(),
+            normalized_value: "fresh.example.net".into(),
+            source_field: "body".into(),
+            start_offset: 0,
+            end_offset: 17,
+            surrounding_text: "fresh.example.net".into(),
+            confidence_hint: Some(80),
+        };
+        let indicator_id = db.upsert_indicator(&indicator).unwrap();
+        let provider_id = db
+            .create_enrichment_provider(&EnrichmentProviderCreate {
+                name: "fresh-test".into(),
+                provider_type: "fresh_test".into(),
+                enabled: true,
+                supports_types: vec![IndicatorType::Domain],
+                ..EnrichmentProviderCreate::default()
+            })
+            .unwrap();
+
+        // No fresh result yet -> job is queued.
+        let queued = db
+            .queue_enrichment_jobs_for_indicators(&[indicator_id])
+            .unwrap();
+        assert_eq!(queued.len(), 1);
+
+        // Succeeded result with NULL expires_at is fresh and suppresses re-queueing.
+        db.store_enrichment_result(
+            indicator_id,
+            provider_id,
+            &sentinel_enrichment::EnrichmentResult {
+                provider_name: "fresh-test".into(),
+                indicator_type: IndicatorType::Domain,
+                normalized_value: "fresh.example.net".into(),
+                reputation: sentinel_enrichment::Reputation::Benign,
+                score: None,
+                verdict: None,
+                summary: None,
+                raw_json: serde_json::json!({"fresh": true}),
+                expires_at: None,
+            },
+        )
+        .unwrap();
+        let after_null = db
+            .queue_enrichment_jobs_for_indicators(&[indicator_id])
+            .unwrap();
+        assert!(after_null.is_empty());
+
+        // Replace with a future expiry: still fresh, still suppressed.
+        db.store_enrichment_result(
+            indicator_id,
+            provider_id,
+            &sentinel_enrichment::EnrichmentResult {
+                provider_name: "fresh-test".into(),
+                indicator_type: IndicatorType::Domain,
+                normalized_value: "fresh.example.net".into(),
+                reputation: sentinel_enrichment::Reputation::Benign,
+                score: None,
+                verdict: None,
+                summary: None,
+                raw_json: serde_json::json!({"fresh": true}),
+                expires_at: Some(Utc::now() + Duration::hours(24)),
+            },
+        )
+        .unwrap();
+        let after_future = db
+            .queue_enrichment_jobs_for_indicators(&[indicator_id])
+            .unwrap();
+        assert!(after_future.is_empty());
     }
 
     #[test]
