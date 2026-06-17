@@ -28,6 +28,24 @@ fn push_error(errors: &mut Vec<String>, msg: String) {
     }
 }
 
+fn send_msg(tx: &mpsc::Sender<AutoFetchMessage>, msg: AutoFetchMessage) -> bool {
+    if let Err(e) = tx.send(msg) {
+        eprintln!("auto-fetch worker: failed to send message: {}", e);
+        false
+    } else {
+        true
+    }
+}
+
+fn send_control(tx: &mpsc::Sender<()>, value: ()) -> bool {
+    if let Err(e) = tx.send(value) {
+        eprintln!("auto-fetch worker: failed to send stop signal: {}", e);
+        false
+    } else {
+        true
+    }
+}
+
 #[derive(Debug)]
 pub struct AutoFetcher {
     handle: Option<thread::JoinHandle<()>>,
@@ -40,7 +58,7 @@ impl AutoFetcher {
         interval_minutes: u32,
         tls_trust_store: TlsTrustStore,
         tx: mpsc::Sender<AutoFetchMessage>,
-    ) -> Self {
+    ) -> Result<Self, std::io::Error> {
         let (stop_tx, stop_rx) = mpsc::channel::<()>();
         let interval = Duration::from_secs((interval_minutes.max(1) as u64) * 60);
 
@@ -50,12 +68,15 @@ impl AutoFetcher {
                 let db = match Db::open(&db_path) {
                     Ok(db) => db,
                     Err(e) => {
-                        let _ = tx.send(AutoFetchMessage::Completed {
-                            feeds_attempted: 0,
-                            feeds_succeeded: 0,
-                            alerts_created: 0,
-                            errors: vec![format!("Failed to open DB: {}", e)],
-                        });
+                        send_msg(
+                            &tx,
+                            AutoFetchMessage::Completed {
+                                feeds_attempted: 0,
+                                feeds_succeeded: 0,
+                                alerts_created: 0,
+                                errors: vec![format!("Failed to open DB: {}", e)],
+                            },
+                        );
                         return;
                     }
                 };
@@ -63,7 +84,7 @@ impl AutoFetcher {
                 loop {
                     match stop_rx.recv_timeout(interval) {
                         Ok(()) | Err(mpsc::RecvTimeoutError::Disconnected) => {
-                            let _ = tx.send(AutoFetchMessage::Stopped);
+                            send_msg(&tx, AutoFetchMessage::Stopped);
                             return;
                         }
                         Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -72,12 +93,17 @@ impl AutoFetcher {
                     let feeds = match db.list_feeds(None) {
                         Ok(feeds) => feeds.into_iter().filter(|f| f.enabled).collect::<Vec<_>>(),
                         Err(e) => {
-                            let _ = tx.send(AutoFetchMessage::Completed {
-                                feeds_attempted: 0,
-                                feeds_succeeded: 0,
-                                alerts_created: 0,
-                                errors: vec![format!("Failed to list feeds: {}", e)],
-                            });
+                            if !send_msg(
+                                &tx,
+                                AutoFetchMessage::Completed {
+                                    feeds_attempted: 0,
+                                    feeds_succeeded: 0,
+                                    alerts_created: 0,
+                                    errors: vec![format!("Failed to list feeds: {}", e)],
+                                },
+                            ) {
+                                return;
+                            }
                             continue;
                         }
                     };
@@ -89,12 +115,17 @@ impl AutoFetcher {
                     let keywords = match db.list_keywords(true) {
                         Ok(k) => k,
                         Err(e) => {
-                            let _ = tx.send(AutoFetchMessage::Completed {
-                                feeds_attempted: 0,
-                                feeds_succeeded: 0,
-                                alerts_created: 0,
-                                errors: vec![format!("Failed to list keywords: {}", e)],
-                            });
+                            if !send_msg(
+                                &tx,
+                                AutoFetchMessage::Completed {
+                                    feeds_attempted: 0,
+                                    feeds_succeeded: 0,
+                                    alerts_created: 0,
+                                    errors: vec![format!("Failed to list keywords: {}", e)],
+                                },
+                            ) {
+                                return;
+                            }
                             continue;
                         }
                     };
@@ -121,11 +152,16 @@ impl AutoFetcher {
                             FeedManager::run_fetch_attempt(feed, template, tls_trust_store);
                         match outcome.result {
                             Some(result) => {
-                                let _ = db.record_feed_fetch_outcome(
+                                if let Err(e) = db.record_feed_fetch_outcome(
                                     feed.id,
                                     &outcome.attempt,
                                     Some(result.content_hash.as_str()),
-                                );
+                                ) {
+                                    eprintln!(
+                                        "auto-fetch worker: failed to record feed fetch outcome for '{}': {}",
+                                        feed.name, e
+                                    );
+                                }
                                 feeds_succeeded += 1;
                                 match AlertEngine::process_feed_result(
                                     &db, feed, &result, &keywords,
@@ -151,8 +187,14 @@ impl AutoFetcher {
                                     .as_ref()
                                     .map(|diagnostic| diagnostic.summary.as_str())
                                     .unwrap_or("Fetch failed");
-                                let _ =
-                                    db.record_feed_fetch_outcome(feed.id, &outcome.attempt, None);
+                                if let Err(e) =
+                                    db.record_feed_fetch_outcome(feed.id, &outcome.attempt, None)
+                                {
+                                    eprintln!(
+                                        "auto-fetch worker: failed to record feed fetch outcome for '{}': {}",
+                                        feed.name, e
+                                    );
+                                }
                                 push_error(
                                     &mut errors,
                                     format!("Feed '{}' fetch failed: {}", feed.name, summary),
@@ -161,26 +203,35 @@ impl AutoFetcher {
                         }
                     }
 
-                    let _ = tx.send(AutoFetchMessage::Completed {
-                        feeds_attempted: feeds.len(),
-                        feeds_succeeded,
-                        alerts_created,
-                        errors,
-                    });
+                    if !send_msg(
+                        &tx,
+                        AutoFetchMessage::Completed {
+                            feeds_attempted: feeds.len(),
+                            feeds_succeeded,
+                            alerts_created,
+                            errors,
+                        },
+                    ) {
+                        return;
+                    }
                 }
             })
-            .expect("auto-fetcher thread spawn failed");
+            .map_err(|e| {
+                eprintln!("auto-fetch worker: failed to spawn thread: {}", e);
+                e
+            })?;
 
-        AutoFetcher {
+        Ok(AutoFetcher {
             handle: Some(handle),
             stop_tx,
-        }
+        })
     }
 
     pub fn stop(mut self) {
-        let _ = self.stop_tx.send(());
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
+        if send_control(&self.stop_tx, ()) {
+            if let Some(handle) = self.handle.take() {
+                let _ = handle.join();
+            }
         }
     }
 }
@@ -216,7 +267,8 @@ mod tests {
 
         let (tx, rx) = mpsc::channel();
         // Use a long interval so the thread doesn't do work before we stop it
-        let fetcher = AutoFetcher::spawn(db_path.clone(), 9999, TlsTrustStore::Bundled, tx);
+        let fetcher = AutoFetcher::spawn(db_path.clone(), 9999, TlsTrustStore::Bundled, tx)
+            .expect("spawn should succeed");
         fetcher.stop();
 
         // We may get a Completed message first (DB open failed or empty feeds),

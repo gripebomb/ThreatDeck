@@ -263,12 +263,18 @@ impl App {
 
         if app.config.auto_fetch.enabled {
             let (tx, rx) = mpsc::channel();
-            let fetcher = AutoFetcher::spawn(
+            let fetcher = match AutoFetcher::spawn(
                 app.paths.db_file.clone(),
                 app.config.auto_fetch.interval_minutes,
                 app.config.network.tls_trust_store,
                 tx,
-            );
+            ) {
+                Ok(fetcher) => fetcher,
+                Err(e) => {
+                    eprintln!("Failed to start auto-fetcher: {}", e);
+                    return app;
+                }
+            };
             app.auto_fetcher = Some(fetcher);
             app.auto_fetch_rx = Some(rx);
         }
@@ -1551,12 +1557,18 @@ impl App {
             return;
         }
         let (tx, rx) = mpsc::channel();
-        let fetcher = AutoFetcher::spawn(
+        let fetcher = match AutoFetcher::spawn(
             self.paths.db_file.clone(),
             self.settings_auto_fetch_interval,
             self.settings_tls_trust_store,
             tx,
-        );
+        ) {
+            Ok(fetcher) => fetcher,
+            Err(e) => {
+                eprintln!("Failed to start auto-fetcher: {}", e);
+                return;
+            }
+        };
         self.auto_fetcher = Some(fetcher);
         self.auto_fetch_rx = Some(rx);
     }
