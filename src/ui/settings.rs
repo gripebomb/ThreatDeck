@@ -567,36 +567,36 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
             }
         }
         KeyCode::Char('+') | KeyCode::Char('=')
-            if matches!(app.settings_tab, SettingsTab::General) =>
+            if matches!(app.settings_tab, SettingsTab::General)
+                && app.settings_auto_fetch_interval < 60 =>
         {
-            if app.settings_auto_fetch_interval < 60 {
-                app.settings_auto_fetch_interval += 5;
-                if app.settings_auto_fetch_enabled {
-                    app.restart_auto_fetch();
-                }
-                app.set_notification(
-                    format!(
-                        "Auto-fetch interval: {} min",
-                        app.settings_auto_fetch_interval
-                    ),
-                    crate::types::NotificationType::Info,
-                );
+            app.settings_auto_fetch_interval += 5;
+            if app.settings_auto_fetch_enabled {
+                app.restart_auto_fetch();
             }
+            app.set_notification(
+                format!(
+                    "Auto-fetch interval: {} min",
+                    app.settings_auto_fetch_interval
+                ),
+                crate::types::NotificationType::Info,
+            );
         }
-        KeyCode::Char('-') if matches!(app.settings_tab, SettingsTab::General) => {
-            if app.settings_auto_fetch_interval > 5 {
-                app.settings_auto_fetch_interval -= 5;
-                if app.settings_auto_fetch_enabled {
-                    app.restart_auto_fetch();
-                }
-                app.set_notification(
-                    format!(
-                        "Auto-fetch interval: {} min",
-                        app.settings_auto_fetch_interval
-                    ),
-                    crate::types::NotificationType::Info,
-                );
+        KeyCode::Char('-')
+            if matches!(app.settings_tab, SettingsTab::General)
+                && app.settings_auto_fetch_interval > 5 =>
+        {
+            app.settings_auto_fetch_interval -= 5;
+            if app.settings_auto_fetch_enabled {
+                app.restart_auto_fetch();
             }
+            app.set_notification(
+                format!(
+                    "Auto-fetch interval: {} min",
+                    app.settings_auto_fetch_interval
+                ),
+                crate::types::NotificationType::Info,
+            );
         }
         KeyCode::Char('p') => {
             if let Some(cutoff) = chrono::Utc::now()
