@@ -728,7 +728,7 @@ impl Db {
                 let hash: String = row.get(1)?;
                 Ok((hash, id))
             })?;
-            id_by_hash.extend(rows.collect::<Result<Vec<_>, _>>()?.into_iter());
+            id_by_hash.extend(rows.collect::<Result<Vec<_>, _>>()?);
         }
 
         let mut stored_items = Vec::with_capacity(new_items.len());
@@ -1782,7 +1782,7 @@ impl Db {
                 let normalized_value: String = row.get(2)?;
                 Ok(((indicator_type, normalized_value), id))
             })?;
-            id_by_key.extend(rows.collect::<Result<Vec<_>, _>>()?.into_iter());
+            id_by_key.extend(rows.collect::<Result<Vec<_>, _>>()?);
         }
 
         let mut ids = Vec::with_capacity(indicators.len());
@@ -2195,7 +2195,7 @@ impl Db {
                 let indicator_type: String = row.get(1)?;
                 Ok((id, indicator_type_from_db(&indicator_type)))
             })?;
-            indicators_by_id.extend(indicator_rows.collect::<Result<Vec<_>, _>>()?.into_iter());
+            indicators_by_id.extend(indicator_rows.collect::<Result<Vec<_>, _>>()?);
         }
 
         // Build candidate (indicator_id, provider_id) pairs in memory.
