@@ -29,6 +29,7 @@
 
 docs/
 .sisyphus/
+tickets/
 
 # Understand Anything
 .understand-anything/intermediate/
