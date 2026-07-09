@@ -2,7 +2,7 @@
 //!
 //! Unlike the legacy alerts screen (which keyed off `alerts_list` /
 //! `alerts_selected`), these operate on the workbench's selected alert
-//! (`app.workbench.selected_alert_id`). After each mutation we reload the
+//! (`app.workbench.selected_alert_id()`). After each mutation we reload the
 //! selected bundle and/or the list so the panes reflect the change, and surface
 //! the result via the app notification bar.
 //!
@@ -80,11 +80,23 @@ pub fn escalate(app: &mut App) {
     );
 }
 
-/// Reopen the selected alert (`O`).
+/// Reopen the selected alert (`O`). Only meaningful for a `Closed` alert;
+/// reopening an already-open alert would silently re-acknowledge it with a
+/// misleading success message, so we refuse with a warning instead.
 pub fn reopen(app: &mut App) {
-    let Some(id) = app.workbench.selected_alert_id else {
+    let Some(id) = app.workbench.selected_alert_id() else {
         return;
     };
+    let is_closed = app
+        .workbench_bundle
+        .as_ref()
+        .and_then(|b| b.detail.as_ref())
+        .map(|d| d.status == AlertStatus::Closed)
+        .unwrap_or(false);
+    if !is_closed {
+        app.set_notification("Alert is not closed".into(), NotificationType::Warning);
+        return;
+    }
     match app.db.reopen_alert(id, None) {
         Ok(()) => {
             app.refresh_workbench();
@@ -100,7 +112,7 @@ pub fn reopen(app: &mut App) {
 /// Close the selected alert (`C`). Requires a non-`Unknown` disposition; if
 /// none is set, prompt the user to pick one (`T`).
 pub fn close(app: &mut App) {
-    let Some(id) = app.workbench.selected_alert_id else {
+    let Some(id) = app.workbench.selected_alert_id() else {
         return;
     };
     let disposition = app
@@ -132,7 +144,7 @@ pub fn close(app: &mut App) {
 }
 
 fn set_status(app: &mut App, status: AlertStatus, msg: &str, typ: NotificationType) {
-    let Some(id) = app.workbench.selected_alert_id else {
+    let Some(id) = app.workbench.selected_alert_id() else {
         return;
     };
     let res = app
@@ -154,7 +166,7 @@ fn set_status(app: &mut App, status: AlertStatus, msg: &str, typ: NotificationTy
 
 /// Open the enum selector for the given target (`s` / `T` / `S`).
 pub fn start_enum_select(app: &mut App, target: TriageEnumTarget) {
-    if app.workbench.selected_alert_id.is_none() {
+    if app.workbench.selected_alert_id().is_none() {
         return;
     }
     app.triage_enum_select_mode = true;
@@ -172,7 +184,7 @@ fn handle_enum_select_key(app: &mut App, key: KeyEvent) {
         }
         KeyCode::Char(c) if c.is_ascii_digit() => {
             let idx = (c as usize).saturating_sub('0' as usize).saturating_sub(1);
-            if let Some(id) = app.workbench.selected_alert_id {
+            if let Some(id) = app.workbench.selected_alert_id() {
                 match target {
                     TriageEnumTarget::Status => {
                         if let Some((s, label)) = status_options().get(idx).copied() {
@@ -256,7 +268,7 @@ fn severity_options() -> Vec<(Criticality, &'static str)> {
 
 /// Begin free-text entry for a triage note (`N`) or the owner (`M`).
 pub fn start_note_input(app: &mut App, target: TriageInputTarget) {
-    if app.workbench.selected_alert_id.is_none() {
+    if app.workbench.selected_alert_id().is_none() {
         return;
     }
     app.triage_note_input_mode = true;
@@ -271,7 +283,7 @@ fn handle_note_input_key(app: &mut App, key: KeyEvent) {
         KeyCode::Enter => {
             let text = app.triage_note_input.trim().to_string();
             if !text.is_empty() {
-                if let Some(id) = app.workbench.selected_alert_id {
+                if let Some(id) = app.workbench.selected_alert_id() {
                     let (res, ok_msg): (anyhow::Result<()>, String) = match app.triage_input_target
                     {
                         TriageInputTarget::Note => {
@@ -317,7 +329,7 @@ fn cancel_note(app: &mut App) {
 
 /// Export the selected alert to a Markdown report under `data_dir/exports` (`x`).
 pub fn export_selected(app: &mut App) {
-    let Some(id) = app.workbench.selected_alert_id else {
+    let Some(id) = app.workbench.selected_alert_id() else {
         return;
     };
     let options = threatdeck_report::ReportExportOptions {
@@ -514,7 +526,7 @@ mod tests {
         // Keep closed alerts visible so close/reopen flows can be inspected.
         app.alerts_hide_closed = false;
         app.refresh_workbench();
-        assert_eq!(app.workbench.selected_alert_id, Some(id));
+        assert_eq!(app.workbench.selected_alert_id(), Some(id));
         (app, path)
     }
 
@@ -606,6 +618,23 @@ mod tests {
     }
 
     #[test]
+    fn reopen_refuses_non_closed_alert() {
+        let (mut app, path) = build_app("reopenopen");
+        // The seeded alert starts as New (not Closed).
+        assert_eq!(selected_status(&app), crate::types::AlertStatus::New);
+        reopen(&mut app);
+        // No mutation happened: still New, and a warning was shown.
+        assert_eq!(selected_status(&app), crate::types::AlertStatus::New);
+        assert_eq!(
+            app.notification.as_ref().unwrap().1,
+            NotificationType::Warning
+        );
+        assert_eq!(app.notification.as_ref().unwrap().0, "Alert is not closed");
+        drop(app);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn note_input_saves_and_owner_input_assigns() {
         let (mut app, path) = build_app("note");
 
@@ -688,7 +717,7 @@ mod tests {
         // Clear the selection by filtering to nothing.
         app.alerts_filter = "zzzz-none".into();
         app.refresh_workbench();
-        assert!(app.workbench.selected_alert_id.is_none());
+        assert!(app.workbench.selected_alert_id().is_none());
 
         acknowledge(&mut app);
         assert!(

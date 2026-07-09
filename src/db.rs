@@ -2468,6 +2468,60 @@ impl Db {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    /// Batched variant of [`get_latest_enrichment_results`]: fetches the latest
+    /// enrichment result per provider for *every* indicator in `indicator_ids`
+    /// in a single query, grouped by indicator id.
+    ///
+    /// Returns an empty map for empty input. Indicators with no enrichment are
+    /// simply absent from the map (callers default to an empty list).
+    pub fn get_latest_enrichment_results_for_indicators(
+        &self,
+        indicator_ids: &[i64],
+    ) -> Result<HashMap<i64, Vec<EnrichmentResultRecord>>> {
+        let mut out: HashMap<i64, Vec<EnrichmentResultRecord>> =
+            HashMap::with_capacity(indicator_ids.len());
+        if indicator_ids.is_empty() {
+            return Ok(out);
+        }
+        let placeholders: Vec<String> =
+            indicator_ids.iter().map(|_| "?".to_string()).collect();
+        // Per-(indicator, provider) latest result across the requested set.
+        // The join keys on all of indicator_id/provider_id/fetched_at so results
+        // never bleed across indicators (the single-id query scopes this via
+        // its WHERE; batching requires the explicit indicator_id key).
+        let sql = format!(
+            "SELECT er.id, er.indicator_id, er.provider_id, er.status, er.reputation,
+                    er.score, er.verdict, er.summary, er.raw_json, er.fetched_at,
+                    er.expires_at, er.created_at, er.updated_at
+             FROM enrichment_results er
+             JOIN (
+                SELECT indicator_id, provider_id, MAX(fetched_at) AS fetched_at
+                FROM enrichment_results
+                WHERE indicator_id IN ({ids})
+                GROUP BY indicator_id, provider_id
+             ) latest
+               ON latest.indicator_id = er.indicator_id
+              AND latest.provider_id = er.provider_id
+              AND latest.fetched_at = er.fetched_at
+             WHERE er.indicator_id IN ({ids})
+             ORDER BY er.indicator_id, er.fetched_at DESC",
+            ids = placeholders.join(",")
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let param_refs: Vec<&dyn rusqlite::ToSql> = indicator_ids
+            .iter()
+            .map(|id| id as &dyn rusqlite::ToSql)
+            .chain(indicator_ids.iter().map(|id| id as &dyn rusqlite::ToSql))
+            .collect();
+        let rows =
+            stmt.query_map(rusqlite::params_from_iter(param_refs), Self::row_to_enrichment_result)?;
+        for row in rows {
+            let record = row?;
+            out.entry(record.indicator_id).or_default().push(record);
+        }
+        Ok(out)
+    }
+
     pub fn get_enrichment_job(&self, id: i64) -> Result<Option<EnrichmentJobRecord>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, indicator_id, provider_id, status, priority, attempt_count,
@@ -3584,6 +3638,101 @@ mod tests {
         assert_eq!(results[0].verdict.as_deref(), Some("Known Exploited"));
         let indicator = db.get_indicator(indicator_id).unwrap().unwrap();
         assert_eq!(indicator.risk_score, Some(95));
+    }
+
+    #[test]
+    fn latest_enrichment_results_batched_by_indicator() {
+        let db = memory_db();
+        db.init_schema().unwrap();
+        let provider_id = db
+            .create_enrichment_provider(&EnrichmentProviderCreate {
+                name: "cisa-kev".into(),
+                provider_type: "cisa_kev".into(),
+                enabled: true,
+                config_json: None,
+                secret_ref: None,
+                rate_limit_per_minute: Some(60),
+                supports_types: vec![IndicatorType::Cve],
+            })
+            .unwrap();
+
+        let id_a = db
+            .upsert_indicator(&sentinel_ioc::ExtractedIndicator {
+                indicator_type: IndicatorType::Cve,
+                value: "CVE-2025-11111".into(),
+                normalized_value: "CVE-2025-11111".into(),
+                source_field: "body".into(),
+                start_offset: 0,
+                end_offset: 13,
+                surrounding_text: "CVE-2025-11111".into(),
+                confidence_hint: Some(90),
+            })
+            .unwrap();
+        let id_b = db
+            .upsert_indicator(&sentinel_ioc::ExtractedIndicator {
+                indicator_type: IndicatorType::Cve,
+                value: "CVE-2025-22222".into(),
+                normalized_value: "CVE-2025-22222".into(),
+                source_field: "body".into(),
+                start_offset: 0,
+                end_offset: 13,
+                surrounding_text: "CVE-2025-22222".into(),
+                confidence_hint: Some(90),
+            })
+            .unwrap();
+        // id_c intentionally has no enrichment stored.
+        let id_c = db
+            .upsert_indicator(&sentinel_ioc::ExtractedIndicator {
+                indicator_type: IndicatorType::Domain,
+                value: "bare.example.net".into(),
+                normalized_value: "bare.example.net".into(),
+                source_field: "body".into(),
+                start_offset: 0,
+                end_offset: 15,
+                surrounding_text: "bare.example.net".into(),
+                confidence_hint: Some(50),
+            })
+            .unwrap();
+
+        for (id, score) in [(id_a, 80), (id_b, 95)] {
+            db.store_enrichment_result(
+                id,
+                provider_id,
+                &sentinel_enrichment::EnrichmentResult {
+                    provider_name: "cisa-kev".into(),
+                    indicator_type: IndicatorType::Cve,
+                    normalized_value: "x".into(),
+                    reputation: sentinel_enrichment::Reputation::Malicious,
+                    score: Some(score),
+                    verdict: None,
+                    summary: None,
+                    raw_json: serde_json::json!({}),
+                    expires_at: None,
+                },
+            )
+            .unwrap();
+        }
+
+        // Empty input → empty map.
+        assert!(db
+            .get_latest_enrichment_results_for_indicators(&[])
+            .unwrap()
+            .is_empty());
+
+        let batched = db
+            .get_latest_enrichment_results_for_indicators(&[id_a, id_b, id_c])
+            .unwrap();
+        // id_a / id_b present with their stored scores; id_c absent (no data).
+        assert_eq!(batched.len(), 2);
+        assert_eq!(batched[&id_a][0].score, Some(80));
+        assert_eq!(batched[&id_b][0].score, Some(95));
+        assert!(!batched.contains_key(&id_c));
+
+        // Each indicator maps to exactly one result, from the right provider.
+        assert_eq!(batched[&id_a].len(), 1);
+        assert_eq!(batched[&id_a][0].provider_id, provider_id);
+        assert_eq!(batched[&id_a][0].indicator_id, id_a);
+        assert_eq!(batched[&id_b][0].indicator_id, id_b);
     }
 
     #[test]

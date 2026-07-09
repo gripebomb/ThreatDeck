@@ -29,7 +29,7 @@ use crate::ui::alert_workbench::context_tabs::draw_context_panel;
 use crate::ui::alert_workbench::state::AlertPane;
 use crate::ui::alert_workbench::triage;
 use crate::ui::alert_workbench::{compute_layout, LayoutMode};
-use crate::ui::list::{motion_from_key, move_selection};
+use crate::ui::list::motion_from_key;
 
 /// Render the assembled split-pane alert workbench.
 ///
@@ -189,8 +189,6 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         return;
     }
 
-    let len = app.workbench_items.len();
-
     // 1) Pane-local scrolling when a scrollable pane (details/context) is focused.
     if app.workbench.focused_pane != AlertPane::AlertList {
         if let Some(delta) = scroll_delta(key) {
@@ -202,9 +200,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
     // 2) Alert-list selection via the shared motion helper (j/k/arrows/gg/G/
     //    Ctrl-d/u). Also reloads the selected alert's bundle.
     if let Some(motion) = motion_from_key(key, &mut app.pending_g) {
-        app.workbench.selected_alert_index =
-            move_selection(app.workbench.selected_alert_index, len, motion);
-        app.workbench_reload_selected();
+        app.workbench_move_selection(motion);
         return;
     }
 
@@ -396,7 +392,7 @@ mod tests {
     #[test]
     fn triage_acknowledge_key_routes_through_handler() {
         let (mut app, path) = build_app("triagekey", 2);
-        let id = app.workbench.selected_alert_id;
+        let id = app.workbench.selected_alert_id();
         handle_key(
             &mut app,
             KeyEvent::new(KeyCode::Char('A'), KeyModifiers::NONE),
@@ -415,7 +411,7 @@ mod tests {
             NotificationType::Success
         );
         // Selection survives the refresh.
-        assert_eq!(app.workbench.selected_alert_id, id);
+        assert_eq!(app.workbench.selected_alert_id(), id);
         drop(app);
         let _ = std::fs::remove_file(path);
     }
@@ -484,7 +480,7 @@ mod tests {
     #[test]
     fn moving_selection_reloads_bundle() {
         let (mut app, path) = build_app("select", 3);
-        let first_id = app.workbench.selected_alert_id;
+        let first_id = app.workbench.selected_alert_id();
         assert!(first_id.is_some());
         assert!(app.workbench_bundle.is_some());
 
@@ -493,7 +489,7 @@ mod tests {
             &mut app,
             KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
         );
-        let next_id = app.workbench.selected_alert_id;
+        let next_id = app.workbench.selected_alert_id();
         assert_ne!(first_id, next_id, "selection should have moved");
         assert!(app.workbench_bundle.is_some(), "bundle should reload");
         drop(app);
@@ -530,7 +526,7 @@ mod tests {
                 KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
             );
         }
-        assert_eq!(app.workbench.selected_alert_index, 3);
+        assert_eq!(app.workbench.selected_alert_index(), 3);
         // `gg` jumps to top.
         handle_key(
             &mut app,
@@ -540,13 +536,13 @@ mod tests {
             &mut app,
             KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
         );
-        assert_eq!(app.workbench.selected_alert_index, 0);
+        assert_eq!(app.workbench.selected_alert_index(), 0);
         // `G` jumps to bottom.
         handle_key(
             &mut app,
             KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
         );
-        assert_eq!(app.workbench.selected_alert_index, 4);
+        assert_eq!(app.workbench.selected_alert_index(), 4);
         drop(app);
         let _ = std::fs::remove_file(path);
     }
@@ -555,13 +551,13 @@ mod tests {
     fn ctrl_d_moves_list_selection_half_page() {
         let (mut app, path) = build_app("ctrld", 5);
         assert_eq!(app.workbench.focused_pane, AlertPane::AlertList);
-        assert_eq!(app.workbench.selected_alert_index, 0);
+        assert_eq!(app.workbench.selected_alert_index(), 0);
         // Ctrl-d on the list moves the selection (clamped to the last row).
         handle_key(
             &mut app,
             KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
         );
-        assert_eq!(app.workbench.selected_alert_index, 4);
+        assert_eq!(app.workbench.selected_alert_index(), 4);
         drop(app);
         let _ = std::fs::remove_file(path);
     }
@@ -578,14 +574,14 @@ mod tests {
             &mut app,
             KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
         );
-        let selected = app.workbench.selected_alert_id;
-        let index = app.workbench.selected_alert_index;
+        let selected = app.workbench.selected_alert_id();
+        let index = app.workbench.selected_alert_index();
         assert!(selected.is_some());
 
         // Refresh keeps the same alert selected (by id).
         app.refresh_workbench();
-        assert_eq!(app.workbench.selected_alert_id, selected);
-        assert_eq!(app.workbench.selected_alert_index, index);
+        assert_eq!(app.workbench.selected_alert_id(), selected);
+        assert_eq!(app.workbench.selected_alert_index(), index);
         drop(app);
         let _ = std::fs::remove_file(path);
     }
@@ -619,7 +615,7 @@ mod tests {
         app.alerts_filter = "zzzz-no-such-alert".into();
         app.refresh_workbench();
         assert!(app.workbench_items.is_empty());
-        assert!(app.workbench.selected_alert_id.is_none());
+        assert!(app.workbench.selected_alert_id().is_none());
 
         // None of these should panic; selection stays empty/None.
         for code in [
@@ -634,8 +630,8 @@ mod tests {
         ] {
             handle_key(&mut app, KeyEvent::new(code, KeyModifiers::NONE));
         }
-        assert!(app.workbench.selected_alert_id.is_none());
-        assert_eq!(app.workbench.selected_alert_index, 0);
+        assert!(app.workbench.selected_alert_id().is_none());
+        assert_eq!(app.workbench.selected_alert_index(), 0);
         drop(app);
         let _ = std::fs::remove_file(path);
     }

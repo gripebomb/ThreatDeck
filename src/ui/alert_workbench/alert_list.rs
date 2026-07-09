@@ -84,7 +84,7 @@ pub fn draw_alert_list(
     let header = build_header(compact, theme);
 
     let mut table_state = TableState::default();
-    table_state.select(Some(state.selected_alert_index.min(items.len() - 1)));
+    table_state.select(Some(state.selected_alert_index().min(items.len() - 1)));
     // The stateful `Table` clamps its own offset to the last row and scrolls
     // the viewport to keep the selected row visible (`Table::visible_rows`),
     // so no manual offset/clamp is needed here — list navigation is purely
@@ -228,7 +228,9 @@ mod tests {
 
     fn state_with_selection(index: usize, focused: bool) -> AlertWorkbenchState {
         let mut s = AlertWorkbenchState::new();
-        s.selected_alert_index = index;
+        // Render tests only care about the row index; pass a large list so the
+        // index is used as-is (id is irrelevant to the list renderer).
+        s.set_selection(index, usize::MAX, |_| None);
         s.focused_pane = if focused {
             AlertPane::AlertList
         } else {

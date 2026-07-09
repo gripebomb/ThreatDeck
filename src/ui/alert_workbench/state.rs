@@ -161,9 +161,16 @@ pub fn clamp_scroll(scroll: u16, content_lines: u16, viewport_lines: u16) -> u16
 #[derive(Debug, Clone, Default)]
 pub struct AlertWorkbenchState {
     /// Stable id of the selected alert, preserved across refreshes where possible.
-    pub selected_alert_id: Option<i64>,
-    /// Index into the loaded alert list (clamped to list bounds).
-    pub selected_alert_index: usize,
+    ///
+    /// Private on purpose: it must stay in sync with `selected_alert_index`.
+    /// All changes flow through [`Self::set_selection`] / [`Self::select_at`] /
+    /// [`Self::restore_selection_by_id`], which update the pair together so a
+    /// desync is unrepresentable. Read via [`Self::selected_alert_id`].
+    selected_alert_id: Option<i64>,
+    /// Index into the loaded alert list (clamped to list bounds). Private for
+    /// the same reason as `selected_alert_id`; read via
+    /// [`Self::selected_alert_index`].
+    selected_alert_index: usize,
     /// Vertical scroll of the left alert list (in rows).
     pub alert_list_scroll: usize,
     /// Currently focused pane.
@@ -219,63 +226,63 @@ impl AlertWorkbenchState {
     }
 
     // ── Alert selection ──────────────────────────────────────────────────────
+    //
+    // The selection is an (index, id) pair that must stay consistent:
+    // `selected_alert_id` is the id of the alert at `selected_alert_index` in
+    // the loaded list. The id↔index mapping lives in `App` (which owns the
+    // items), so both fields are private and every change flows through a
+    // method that updates them together. There are no index-only mutators
+    // (the old `move_selection_*` helpers were removed because they could move
+    // the index without updating the id).
 
-    /// Move selection up by one, clamped at the top (no-op on an empty list).
-    pub fn move_selection_up(&mut self, list_len: usize) {
-        if list_len == 0 {
-            self.selected_alert_index = 0;
-            return;
-        }
-        self.selected_alert_index = self
-            .selected_alert_index
-            .saturating_sub(1)
-            .min(list_len - 1);
+    /// The selected alert's stable id (preserved across refreshes).
+    pub fn selected_alert_id(&self) -> Option<i64> {
+        self.selected_alert_id
     }
 
-    /// Move selection down by one, clamped at the last row.
-    pub fn move_selection_down(&mut self, list_len: usize) {
-        if list_len == 0 {
-            self.selected_alert_index = 0;
-            return;
-        }
-        self.selected_alert_index = (self.selected_alert_index + 1).min(list_len - 1);
+    /// The index of the selected row in the currently loaded alert list.
+    pub fn selected_alert_index(&self) -> usize {
+        self.selected_alert_index
     }
 
-    /// Move selection to the first row.
-    pub fn move_selection_top(&mut self, list_len: usize) {
-        self.selected_alert_index = 0;
+    /// Set the selection to `desired_index` (clamped to `[0, len-1]`) and derive
+    /// `selected_alert_id` via `id_at_index`. This is the single way to move the
+    /// selection, so the index↔id invariant can't be broken by callers. Does
+    /// not reset detail/context scroll.
+    pub fn set_selection(
+        &mut self,
+        desired_index: usize,
+        list_len: usize,
+        id_at_index: impl Fn(usize) -> Option<i64>,
+    ) {
+        // An empty list has no selectable row: clear the id rather than asking
+        // the closure for a bogus index-0 id.
         if list_len == 0 {
+            self.selected_alert_index = 0;
             self.selected_alert_id = None;
+            return;
         }
+        let clamped = desired_index.min(list_len - 1);
+        self.selected_alert_index = clamped;
+        self.selected_alert_id = id_at_index(clamped);
     }
 
-    /// Move selection to the last row.
-    pub fn move_selection_bottom(&mut self, list_len: usize) {
-        self.selected_alert_index = list_len.saturating_sub(1);
-    }
-
-    /// Set an explicit index, clamped to `[0, list_len-1]`. Does not change the
-    /// preserved alert id (use [`Self::select_at`] to also update the id).
-    pub fn set_selected_index(&mut self, index: usize, list_len: usize) {
-        self.selected_alert_index = if list_len == 0 {
+    /// Move selection to a row and record its alert id, then reset
+    /// detail/context scroll (a new alert is being shown).
+    pub fn select_at(&mut self, index: usize, list_len: usize, alert_id: Option<i64>) {
+        let clamped = if list_len == 0 {
             0
         } else {
             index.min(list_len - 1)
         };
-    }
-
-    /// Move selection to a row and record the selected alert id. This is the
-    /// selection-change entry point used after `j/k` navigation; it also resets
-    /// detail/context scroll since a new alert is shown.
-    pub fn select_at(&mut self, index: usize, list_len: usize, alert_id: Option<i64>) {
-        self.set_selected_index(index, list_len);
+        self.selected_alert_index = clamped;
         self.selected_alert_id = alert_id;
         self.reset_scroll_for_selection_change();
     }
 
     /// After a list refresh, restore the selection to the previously selected
-    /// alert id when it still exists, else clamp to bounds. Returns whether the
-    /// preserved id was found.
+    /// alert id when it still exists, else fall back to the clamped index (and
+    /// its id). Returns whether the preserved id was found.
     pub fn restore_selection_by_id(
         &mut self,
         list_len: usize,
@@ -294,8 +301,11 @@ impl AlertWorkbenchState {
                 }
             }
         }
-        // Fall back to current index clamped to bounds.
-        self.set_selected_index(self.selected_alert_index, list_len);
+        // Fall back to the clamped index and reconcile its id so the pair stays
+        // consistent even without a follow-up `set_selection`.
+        let clamped = self.selected_alert_index.min(list_len - 1);
+        self.selected_alert_index = clamped;
+        self.selected_alert_id = id_at_index(clamped);
         false
     }
 
@@ -436,72 +446,43 @@ mod tests {
         assert_eq!(s.bottom_detail_scroll, 0);
     }
 
-    // ── Alert selection movement ─────────────────────────────────────────────
+    // ── Alert selection ─────────────────────────────────────────────────────
+    //
+    // The index↔id invariant is enforced by routing all selection changes
+    // through `set_selection` / `select_at` / `restore_selection_by_id`. These
+    // cover clamping and id reconciliation.
 
-    #[test]
-    fn selection_moves_down_then_up() {
-        let mut s = AlertWorkbenchState::new();
-        s.move_selection_down(5);
-        assert_eq!(s.selected_alert_index, 1);
-        s.move_selection_down(5);
-        assert_eq!(s.selected_alert_index, 2);
-        s.move_selection_up(5);
-        assert_eq!(s.selected_alert_index, 1);
-        s.move_selection_up(5);
-        assert_eq!(s.selected_alert_index, 0);
+    fn ids(start: i64) -> impl Fn(usize) -> Option<i64> {
+        move |i| Some(start + i as i64)
     }
 
     #[test]
-    fn selection_top_and_bottom() {
+    fn set_selection_clamps_index_and_derives_id() {
         let mut s = AlertWorkbenchState::new();
-        s.move_selection_bottom(7);
-        assert_eq!(s.selected_alert_index, 6);
-        s.move_selection_top(7);
-        assert_eq!(s.selected_alert_index, 0);
-    }
-
-    // ── Selection bounds ─────────────────────────────────────────────────────
-
-    #[test]
-    fn selection_clamps_at_bottom() {
-        let mut s = AlertWorkbenchState::new();
-        s.move_selection_down(3);
-        s.move_selection_down(3);
-        s.move_selection_down(3);
-        s.move_selection_down(3);
-        assert_eq!(s.selected_alert_index, 2);
+        // Out-of-range index clamps to the last row, id derived from it.
+        s.set_selection(100, 5, ids(10));
+        assert_eq!(s.selected_alert_index(), 4);
+        assert_eq!(s.selected_alert_id(), Some(14));
+        // In-range index maps to its own id.
+        s.set_selection(2, 5, ids(10));
+        assert_eq!(s.selected_alert_index(), 2);
+        assert_eq!(s.selected_alert_id(), Some(12));
+        // Empty list clamps to 0 with no id.
+        s.set_selection(3, 0, ids(10));
+        assert_eq!(s.selected_alert_index(), 0);
+        assert_eq!(s.selected_alert_id(), None);
     }
 
     #[test]
-    fn selection_clamps_at_top() {
+    fn set_selection_keeps_index_and_id_in_sync() {
         let mut s = AlertWorkbenchState::new();
-        s.selected_alert_index = 0;
-        for _ in 0..5 {
-            s.move_selection_up(4);
+        // There is no way to set the index without also deriving the id, so the
+        // pair can't drift. Every set_selection yields a consistent id-at-index.
+        for i in 0..5 {
+            s.set_selection(i, 5, ids(100));
+            assert_eq!(s.selected_alert_id(), Some(100 + i as i64));
+            assert_eq!(s.selected_alert_index(), i);
         }
-        assert_eq!(s.selected_alert_index, 0);
-    }
-
-    #[test]
-    fn selection_clamps_on_empty_list() {
-        let mut s = AlertWorkbenchState::new();
-        s.move_selection_down(0);
-        assert_eq!(s.selected_alert_index, 0);
-        s.move_selection_up(0);
-        assert_eq!(s.selected_alert_index, 0);
-        s.move_selection_bottom(0);
-        assert_eq!(s.selected_alert_index, 0);
-    }
-
-    #[test]
-    fn set_selected_index_clamps_to_bounds() {
-        let mut s = AlertWorkbenchState::new();
-        s.set_selected_index(100, 5);
-        assert_eq!(s.selected_alert_index, 4);
-        s.set_selected_index(2, 5);
-        assert_eq!(s.selected_alert_index, 2);
-        s.set_selected_index(0, 0);
-        assert_eq!(s.selected_alert_index, 0);
     }
 
     // ── Selection preserves alert id ─────────────────────────────────────────

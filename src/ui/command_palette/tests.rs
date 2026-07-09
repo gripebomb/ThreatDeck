@@ -1,7 +1,18 @@
+use crate::types::Screen;
 use crate::ui::command_palette::command::CommandAvailability;
 use crate::ui::command_palette::registry::CommandContext;
 use crate::ui::command_palette::{matcher, registry, CommandId, CommandPaletteState, PaletteMode};
 use std::collections::HashSet;
+
+/// A context sitting on the Alerts workbench with an alert selected, so the
+/// workbench-only (focus/tab/triage) commands are available.
+fn alerts_ctx_with_selection() -> CommandContext {
+    CommandContext {
+        current_screen: Screen::Alerts,
+        has_selected_alert: true,
+        ..Default::default()
+    }
+}
 
 #[test]
 fn all_command_ids_are_unique() {
@@ -56,8 +67,10 @@ fn contextual_commands_filtered_correctly() {
                 CommandAvailability::WhenFeedSelected
                     | CommandAvailability::WhenAlertSelected
                     | CommandAvailability::WhenKeywordSelected
+                    | CommandAvailability::WhenScreen(_)
+                    | CommandAvailability::WhenScreenAlertSelected(_)
             ),
-            "Contextual command {:?} should be hidden when nothing selected",
+            "Contextual command {:?} should be hidden when nothing selected / wrong screen",
             cmd.id
         );
     }
@@ -73,6 +86,71 @@ fn contextual_commands_filtered_correctly() {
             .any(|c| c.id == CommandId::FeedEditSelected),
         "FeedEditSelected should be available when feed is selected"
     );
+}
+
+#[test]
+fn workbench_commands_hidden_off_alerts_screen() {
+    // On any non-Alerts screen, workbench focus/tab/triage commands must not
+    // appear in the palette (Issue #8 regression).
+    let ctx = CommandContext {
+        current_screen: Screen::Dashboard,
+        has_selected_alert: true, // even with an alert "selected" elsewhere
+        ..Default::default()
+    };
+    let results = matcher::match_commands("", &ctx);
+    let ids: HashSet<CommandId> = results.iter().map(|m| m.command.id).collect();
+    for workbench_id in [
+        CommandId::AlertFocusList,
+        CommandId::AlertFocusDetails,
+        CommandId::AlertFocusContext,
+        CommandId::AlertTabIndicators,
+        CommandId::AlertTabMetadata,
+        CommandId::AlertTabEnrichment,
+        CommandId::AlertTabHistory,
+        CommandId::AlertTabRaw,
+        CommandId::AlertAcknowledge,
+        CommandId::AlertInvestigate,
+        CommandId::AlertEscalate,
+        CommandId::AlertClose,
+        CommandId::AlertReopen,
+    ] {
+        assert!(
+            !ids.contains(&workbench_id),
+            "workbench command {workbench_id:?} leaked onto {:?}",
+            ctx.current_screen
+        );
+    }
+}
+
+#[test]
+fn workbench_triage_commands_require_selection_on_alerts() {
+    // On Alerts but with no alert selected: focus/tab are available, triage is not.
+    let ctx = CommandContext {
+        current_screen: Screen::Alerts,
+        has_selected_alert: false,
+        ..Default::default()
+    };
+    let ids: HashSet<CommandId> = matcher::match_commands("", &ctx)
+        .iter()
+        .map(|m| m.command.id)
+        .collect();
+    assert!(ids.contains(&CommandId::AlertFocusList), "focus is screen-gated");
+    assert!(
+        !ids.contains(&CommandId::AlertAcknowledge),
+        "triage needs a selected alert"
+    );
+}
+
+#[test]
+fn workbench_commands_visible_on_alerts_with_selection() {
+    let ctx = alerts_ctx_with_selection();
+    let ids: HashSet<CommandId> = matcher::match_commands("", &ctx)
+        .iter()
+        .map(|m| m.command.id)
+        .collect();
+    assert!(ids.contains(&CommandId::AlertFocusList));
+    assert!(ids.contains(&CommandId::AlertTabIndicators));
+    assert!(ids.contains(&CommandId::AlertAcknowledge));
 }
 
 #[test]
@@ -94,13 +172,15 @@ fn normalize_lowercases() {
 }
 
 #[test]
-fn empty_query_returns_all_commands() {
-    let results = matcher::match_commands("");
-    assert_eq!(results.len(), registry::ALL_COMMANDS.len());
+fn empty_query_returns_all_available_commands() {
+    let ctx = CommandContext::default();
+    let results = matcher::match_commands("", &ctx);
+    assert_eq!(results.len(), registry::available_commands(&ctx).len());
 }
 
 #[test]
 fn workbench_commands_are_searchable() {
+    let ctx = alerts_ctx_with_selection();
     // Pane focus via the palette (no 1/2/3 key binding exists).
     let focus_cases: &[(&str, CommandId)] = &[
         ("focus list", CommandId::AlertFocusList),
@@ -124,7 +204,7 @@ fn workbench_commands_are_searchable() {
         ("reopen", CommandId::AlertReopen),
     ];
     for (query, expected) in focus_cases.iter().chain(tab_cases).chain(triage_cases) {
-        let results = matcher::match_commands(query);
+        let results = matcher::match_commands(query, &ctx);
         assert!(
             results.iter().any(|m| m.command.id == *expected),
             "query {query:?} should find {expected:?}"
@@ -134,7 +214,7 @@ fn workbench_commands_are_searchable() {
 
 #[test]
 fn search_by_canonical() {
-    let results = matcher::match_commands("feed check all");
+    let results = matcher::match_commands("feed check all", &CommandContext::default());
     assert!(
         results
             .iter()
@@ -145,7 +225,7 @@ fn search_by_canonical() {
 
 #[test]
 fn search_by_alias() {
-    let results = matcher::match_commands("refresh feeds");
+    let results = matcher::match_commands("refresh feeds", &CommandContext::default());
     assert!(
         results
             .iter()
@@ -156,36 +236,42 @@ fn search_by_alias() {
 
 #[test]
 fn search_by_keyword() {
-    let results = matcher::match_commands("sources");
+    let results = matcher::match_commands("sources", &CommandContext::default());
     assert!(
-        results.iter().any(|m| m.command.id == CommandId::OpenFeeds),
+        results
+            .iter()
+            .any(|m| m.command.id == CommandId::OpenFeeds),
         "Should find OpenFeeds via keyword"
     );
 }
 
 #[test]
 fn exact_canonical_ranks_first() {
-    let results = matcher::match_commands("feed check all");
+    let results = matcher::match_commands("feed check all", &CommandContext::default());
     assert_eq!(results[0].command.id, CommandId::FeedCheckAll);
 }
 
 #[test]
 fn case_insensitive_matching() {
-    let lower = matcher::match_commands("feed check all");
-    let upper = matcher::match_commands("FEED CHECK ALL");
+    let lower = matcher::match_commands("feed check all", &CommandContext::default());
+    let upper = matcher::match_commands("FEED CHECK ALL", &CommandContext::default());
     assert_eq!(lower.len(), upper.len());
     assert_eq!(lower[0].command.id, upper[0].command.id);
 }
 
 #[test]
 fn no_match_returns_empty() {
-    let results = matcher::match_commands("xyz nonexistent");
+    let results = matcher::match_commands("xyz nonexistent", &CommandContext::default());
     assert!(results.is_empty());
 }
 
 #[test]
 fn multi_token_match() {
-    let results = matcher::match_commands("discord test");
+    let ctx = CommandContext {
+        discord_configured: true,
+        ..Default::default()
+    };
+    let results = matcher::match_commands("discord test", &ctx);
     assert!(
         results
             .iter()
@@ -196,11 +282,9 @@ fn multi_token_match() {
 
 #[test]
 fn open_fuzzy_clears_input() {
-    let mut state = CommandPaletteState {
-        input: "previous".to_string(),
-        ..CommandPaletteState::default()
-    };
-    state.open_fuzzy();
+    let mut state = CommandPaletteState::default();
+    state.input = "previous".to_string();
+    state.open_fuzzy(&CommandContext::default());
     assert!(state.is_open);
     assert_eq!(state.mode, PaletteMode::Fuzzy);
     assert_eq!(state.input, "");
@@ -209,7 +293,7 @@ fn open_fuzzy_clears_input() {
 #[test]
 fn open_colon_prefills_colon() {
     let mut state = CommandPaletteState::default();
-    state.open_colon();
+    state.open_colon(&CommandContext::default());
     assert!(state.is_open);
     assert_eq!(state.mode, PaletteMode::Colon);
     assert_eq!(state.input, ":");
@@ -218,7 +302,7 @@ fn open_colon_prefills_colon() {
 #[test]
 fn backspace_in_colon_mode_preserves_colon() {
     let mut state = CommandPaletteState::default();
-    state.open_colon();
+    state.open_colon(&CommandContext::default());
     state.backspace();
     assert_eq!(state.input, ":");
 }
@@ -226,7 +310,7 @@ fn backspace_in_colon_mode_preserves_colon() {
 #[test]
 fn move_down_clamps_at_bottom() {
     let mut state = CommandPaletteState::default();
-    state.open_fuzzy();
+    state.open_fuzzy(&CommandContext::default());
     let count = state.results.len();
     for _ in 0..count + 5 {
         state.move_down();
@@ -237,7 +321,7 @@ fn move_down_clamps_at_bottom() {
 #[test]
 fn move_up_clamps_at_top() {
     let mut state = CommandPaletteState::default();
-    state.open_fuzzy();
+    state.open_fuzzy(&CommandContext::default());
     state.move_down();
     state.move_down();
     state.move_up();
@@ -249,7 +333,7 @@ fn move_up_clamps_at_top() {
 #[test]
 fn close_resets_state() {
     let mut state = CommandPaletteState::default();
-    state.open_fuzzy();
+    state.open_fuzzy(&CommandContext::default());
     state.input_char('t');
     state.move_down();
     state.close();
@@ -262,7 +346,7 @@ fn close_resets_state() {
 #[test]
 fn selection_valid_after_filtering() {
     let mut state = CommandPaletteState::default();
-    state.open_fuzzy();
+    state.open_fuzzy(&CommandContext::default());
     state.move_down();
     state.move_down();
     state.input_char('z');

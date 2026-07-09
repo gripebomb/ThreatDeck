@@ -87,14 +87,20 @@ pub fn load_alert_workbench_bundle(db: &Db, alert_id: i64) -> Result<Option<Aler
     let detail =
         AlertDetailViewModel::from_parts(&alert, feed_name, feed_url, keyword_pattern, tag_names);
 
-    // Indicators, each with its latest enrichment results nested.
-    let mut indicators: Vec<IndicatorViewModel> = db
-        .list_indicators_for_alert(alert.id)?
-        .iter()
-        .map(IndicatorViewModel::from)
-        .collect();
+    // Indicators, each with its latest enrichment results nested. Fetch the
+    // enrichment for all indicators in a single batched query (one round trip)
+    // instead of one query per indicator (N+1).
+    let indicator_records = db.list_indicators_for_alert(alert.id)?;
+    let indicator_ids: Vec<i64> = indicator_records.iter().map(|r| r.id).collect();
+    let mut indicators: Vec<IndicatorViewModel> =
+        indicator_records.iter().map(IndicatorViewModel::from).collect();
+    let enrichment_by_indicator =
+        db.get_latest_enrichment_results_for_indicators(&indicator_ids)?;
     for indicator in &mut indicators {
-        let enrichment = db.get_latest_enrichment_results(indicator.id)?;
+        let enrichment = enrichment_by_indicator
+            .get(&indicator.id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
         indicator.enrichment = enrichment.iter().map(EnrichmentViewModel::from).collect();
     }
 
@@ -586,9 +592,13 @@ impl App {
             KeyCode::Char('0') => self.switch_screen(Screen::Settings),
             KeyCode::Char('?') | KeyCode::F(1) => self.show_help = true,
             KeyCode::Char('/') => self.start_filter(),
-            KeyCode::Char(':') => self.command_palette.state.open_colon(),
+            KeyCode::Char(':') => {
+                let ctx = self.command_context();
+                self.command_palette.state.open_colon(&ctx);
+            }
             KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.command_palette.state.open_fuzzy();
+                let ctx = self.command_context();
+                self.command_palette.state.open_fuzzy(&ctx);
             }
             KeyCode::Esc => self.handle_esc(),
             _ => self.handle_screen_key(key),
@@ -630,6 +640,33 @@ impl App {
                 self.command_palette.state.input_char(c);
             }
             _ => {}
+        }
+    }
+
+    /// Build the command-palette availability context from the current screen
+    /// and selections, so the palette can hide commands that don't apply here
+    /// (e.g. workbench-only actions off the Alerts screen, or selection-based
+    /// actions with nothing selected).
+    fn command_context(&self) -> crate::ui::command_palette::registry::CommandContext {
+        let (discord, webhook, email) = (
+            self.settings_notifications
+                .iter()
+                .any(|n| n.enabled && matches!(n.channel, NotificationChannel::Discord)),
+            self.settings_notifications
+                .iter()
+                .any(|n| n.enabled && matches!(n.channel, NotificationChannel::Webhook)),
+            self.settings_notifications
+                .iter()
+                .any(|n| n.enabled && matches!(n.channel, NotificationChannel::Email)),
+        );
+        crate::ui::command_palette::registry::CommandContext {
+            current_screen: self.screen,
+            has_selected_feed: self.feeds_list.get(self.feeds_selected).is_some(),
+            has_selected_alert: self.workbench.selected_alert_id().is_some(),
+            has_selected_keyword: self.keywords_list.get(self.keywords_selected).is_some(),
+            discord_configured: discord,
+            webhook_configured: webhook,
+            email_configured: email,
         }
     }
 
@@ -683,7 +720,7 @@ impl App {
     /// selected alert. Warns if nothing is selected.
     fn run_workbench_triage(&mut self, action: fn(&mut App)) {
         self.switch_screen(Screen::Alerts);
-        if self.workbench.selected_alert_id.is_some() {
+        if self.workbench.selected_alert_id().is_some() {
             action(self);
         } else {
             self.set_notification(
@@ -820,7 +857,7 @@ impl App {
                 );
             }
             AppAction::AlertMarkSelectedRead => {
-                if let Some(id) = self.workbench.selected_alert_id {
+                if let Some(id) = self.workbench.selected_alert_id() {
                     let _ = self.db.mark_alert_read(id, true);
                     self.refresh_workbench();
                     self.refresh_dashboard();
@@ -836,7 +873,7 @@ impl App {
                 }
             }
             AppAction::AlertMarkSelectedUnread => {
-                if let Some(id) = self.workbench.selected_alert_id {
+                if let Some(id) = self.workbench.selected_alert_id() {
                     let _ = self.db.mark_alert_read(id, false);
                     self.refresh_workbench();
                     self.refresh_dashboard();
@@ -861,7 +898,7 @@ impl App {
                 );
             }
             AppAction::AlertExportSelectedMarkdown => {
-                if self.workbench.selected_alert_id.is_some() {
+                if self.workbench.selected_alert_id().is_some() {
                     // Reuse the workbench exporter (operates on the selected
                     // alert and notifies with the path / error).
                     crate::ui::alert_workbench::triage::export_selected(self);
@@ -1555,7 +1592,7 @@ impl App {
 
         // Load the bundle WITHOUT clearing the error on success — a list error
         // recorded above must stay visible. Only a bundle failure adds one.
-        self.workbench_bundle = match self.workbench.selected_alert_id {
+        self.workbench_bundle = match self.workbench.selected_alert_id() {
             Some(id) => match self.load_selected_alert_bundle(id) {
                 Ok(b) => b,
                 Err(e) => {
@@ -1571,7 +1608,7 @@ impl App {
     /// Reload the bundle for the currently selected alert (no list reload).
     /// Used after a selection move: a successful load clears any prior error.
     pub fn refresh_workbench_bundle(&mut self) {
-        self.workbench_bundle = match self.workbench.selected_alert_id {
+        self.workbench_bundle = match self.workbench.selected_alert_id() {
             Some(id) => match self.load_selected_alert_bundle(id) {
                 Ok(b) => {
                     self.workbench.set_error(None);
@@ -1595,15 +1632,28 @@ impl App {
         self.refresh_workbench_bundle();
     }
 
+    /// Move the workbench alert-list selection by `motion`, reconcile the
+    /// selected alert id from the loaded items, reset detail/context scroll,
+    /// and reload the bundle. Single entry point for `j/k`/`gg`/`G`/half-page
+    /// navigation — callers must never write the (private) selection fields.
+    pub fn workbench_move_selection(&mut self, motion: crate::ui::list::ListMotion) {
+        let len = self.workbench_items.len();
+        let desired =
+            crate::ui::list::move_selection(self.workbench.selected_alert_index(), len, motion);
+        let items = &self.workbench_items;
+        self.workbench
+            .set_selection(desired, len, |i| items.get(i).map(|x| x.id));
+        self.workbench.reset_scroll_for_selection_change();
+        self.refresh_workbench_bundle();
+    }
+
     /// Clamp the selection index to the list and derive `selected_alert_id`.
     fn workbench_sync_selection(&mut self) {
         let len = self.workbench_items.len();
+        let desired = self.workbench.selected_alert_index();
+        let items = &self.workbench_items;
         self.workbench
-            .set_selected_index(self.workbench.selected_alert_index, len);
-        self.workbench.selected_alert_id = self
-            .workbench_items
-            .get(self.workbench.selected_alert_index)
-            .map(|i| i.id);
+            .set_selection(desired, len, |i| items.get(i).map(|x| x.id));
     }
 
     pub fn refresh_articles(&mut self) {
@@ -2228,7 +2278,7 @@ mod workbench_tests {
         );
         // Stale (empty) state is kept; no panic; no selection.
         assert!(app.workbench_items.is_empty());
-        assert!(app.workbench.selected_alert_id.is_none());
+        assert!(app.workbench.selected_alert_id().is_none());
 
         drop(app);
         let _ = std::fs::remove_file(&path);
@@ -2359,7 +2409,7 @@ mod workbench_tests {
         let (mut app, path, _id) = build_app_with_alert("notri");
         app.alerts_filter = "zzzz-none".into();
         app.refresh_workbench();
-        assert!(app.workbench.selected_alert_id.is_none());
+        assert!(app.workbench.selected_alert_id().is_none());
         app.handle_app_action(AppAction::AlertAcknowledge);
         assert_eq!(
             app.notification.as_ref().unwrap().1,

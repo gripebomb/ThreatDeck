@@ -318,7 +318,7 @@ pub static ALL_COMMANDS: &[Command] = &[
         group: CommandGroup::Alert,
         aliases: &["focus alerts", "list pane"],
         keywords: &["alert", "focus", "list", "pane", "workbench"],
-        availability: CommandAvailability::Always,
+        availability: CommandAvailability::WhenScreen(Screen::Alerts),
         action: CommandAction::Dispatch(AppAction::AlertFocusList),
     },
     Command {
@@ -329,7 +329,7 @@ pub static ALL_COMMANDS: &[Command] = &[
         group: CommandGroup::Alert,
         aliases: &["focus details", "details pane"],
         keywords: &["alert", "focus", "details", "pane", "workbench"],
-        availability: CommandAvailability::Always,
+        availability: CommandAvailability::WhenScreen(Screen::Alerts),
         action: CommandAction::Dispatch(AppAction::AlertFocusDetails),
     },
     Command {
@@ -340,7 +340,7 @@ pub static ALL_COMMANDS: &[Command] = &[
         group: CommandGroup::Alert,
         aliases: &["focus context", "context pane"],
         keywords: &["alert", "focus", "context", "pane", "workbench"],
-        availability: CommandAvailability::Always,
+        availability: CommandAvailability::WhenScreen(Screen::Alerts),
         action: CommandAction::Dispatch(AppAction::AlertFocusContext),
     },
     Command {
@@ -351,7 +351,7 @@ pub static ALL_COMMANDS: &[Command] = &[
         group: CommandGroup::Alert,
         aliases: &["indicators tab", "ioc tab"],
         keywords: &["alert", "tab", "indicators", "ioc", "context"],
-        availability: CommandAvailability::Always,
+        availability: CommandAvailability::WhenScreen(Screen::Alerts),
         action: CommandAction::Dispatch(AppAction::AlertTabIndicators),
     },
     Command {
@@ -362,7 +362,7 @@ pub static ALL_COMMANDS: &[Command] = &[
         group: CommandGroup::Alert,
         aliases: &["metadata tab", "json tab"],
         keywords: &["alert", "tab", "metadata", "json", "context"],
-        availability: CommandAvailability::Always,
+        availability: CommandAvailability::WhenScreen(Screen::Alerts),
         action: CommandAction::Dispatch(AppAction::AlertTabMetadata),
     },
     Command {
@@ -373,7 +373,7 @@ pub static ALL_COMMANDS: &[Command] = &[
         group: CommandGroup::Alert,
         aliases: &["enrichment tab"],
         keywords: &["alert", "tab", "enrichment", "context"],
-        availability: CommandAvailability::Always,
+        availability: CommandAvailability::WhenScreen(Screen::Alerts),
         action: CommandAction::Dispatch(AppAction::AlertTabEnrichment),
     },
     Command {
@@ -384,7 +384,7 @@ pub static ALL_COMMANDS: &[Command] = &[
         group: CommandGroup::Alert,
         aliases: &["history tab", "triage tab"],
         keywords: &["alert", "tab", "history", "triage", "context"],
-        availability: CommandAvailability::Always,
+        availability: CommandAvailability::WhenScreen(Screen::Alerts),
         action: CommandAction::Dispatch(AppAction::AlertTabHistory),
     },
     Command {
@@ -395,7 +395,7 @@ pub static ALL_COMMANDS: &[Command] = &[
         group: CommandGroup::Alert,
         aliases: &["raw tab", "raw content"],
         keywords: &["alert", "tab", "raw", "content", "context"],
-        availability: CommandAvailability::Always,
+        availability: CommandAvailability::WhenScreen(Screen::Alerts),
         action: CommandAction::Dispatch(AppAction::AlertTabRaw),
     },
     // ── Workbench triage (one-shot; need a selected alert) ────────────────
@@ -407,7 +407,7 @@ pub static ALL_COMMANDS: &[Command] = &[
         group: CommandGroup::Alert,
         aliases: &["ack alert", "triage acknowledge"],
         keywords: &["alert", "acknowledge", "ack", "triage"],
-        availability: CommandAvailability::WhenAlertSelected,
+        availability: CommandAvailability::WhenScreenAlertSelected(Screen::Alerts),
         action: CommandAction::Dispatch(AppAction::AlertAcknowledge),
     },
     Command {
@@ -418,7 +418,7 @@ pub static ALL_COMMANDS: &[Command] = &[
         group: CommandGroup::Alert,
         aliases: &["investigate alert", "triage investigate"],
         keywords: &["alert", "investigate", "triage"],
-        availability: CommandAvailability::WhenAlertSelected,
+        availability: CommandAvailability::WhenScreenAlertSelected(Screen::Alerts),
         action: CommandAction::Dispatch(AppAction::AlertInvestigate),
     },
     Command {
@@ -429,7 +429,7 @@ pub static ALL_COMMANDS: &[Command] = &[
         group: CommandGroup::Alert,
         aliases: &["escalate alert", "triage escalate"],
         keywords: &["alert", "escalate", "triage"],
-        availability: CommandAvailability::WhenAlertSelected,
+        availability: CommandAvailability::WhenScreenAlertSelected(Screen::Alerts),
         action: CommandAction::Dispatch(AppAction::AlertEscalate),
     },
     Command {
@@ -440,7 +440,7 @@ pub static ALL_COMMANDS: &[Command] = &[
         group: CommandGroup::Alert,
         aliases: &["close alert", "triage close"],
         keywords: &["alert", "close", "triage"],
-        availability: CommandAvailability::WhenAlertSelected,
+        availability: CommandAvailability::WhenScreenAlertSelected(Screen::Alerts),
         action: CommandAction::Dispatch(AppAction::AlertClose),
     },
     Command {
@@ -451,7 +451,7 @@ pub static ALL_COMMANDS: &[Command] = &[
         group: CommandGroup::Alert,
         aliases: &["reopen alert", "triage reopen"],
         keywords: &["alert", "reopen", "triage"],
-        availability: CommandAvailability::WhenAlertSelected,
+        availability: CommandAvailability::WhenScreenAlertSelected(Screen::Alerts),
         action: CommandAction::Dispatch(AppAction::AlertReopen),
     },
     Command {
@@ -623,7 +623,7 @@ pub fn available_commands(ctx: &CommandContext) -> Vec<&'static Command> {
         .collect()
 }
 
-fn is_available(cmd: &Command, ctx: &CommandContext) -> bool {
+pub(crate) fn is_available(cmd: &Command, ctx: &CommandContext) -> bool {
     match cmd.availability {
         CommandAvailability::Always => true,
         CommandAvailability::WhenFeedSelected => ctx.has_selected_feed,
@@ -634,5 +634,9 @@ fn is_available(cmd: &Command, ctx: &CommandContext) -> bool {
             NotificationRouteKind::Webhook => ctx.webhook_configured,
             NotificationRouteKind::Email => ctx.email_configured,
         },
+        CommandAvailability::WhenScreen(screen) => ctx.current_screen == screen,
+        CommandAvailability::WhenScreenAlertSelected(screen) => {
+            ctx.current_screen == screen && ctx.has_selected_alert
+        }
     }
 }

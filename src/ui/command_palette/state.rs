@@ -1,5 +1,6 @@
 use super::command::Command;
 use super::matcher::CommandMatch;
+use super::registry::CommandContext;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaletteMode {
@@ -15,6 +16,11 @@ pub struct CommandPaletteState {
     pub selected_index: usize,
     pub scroll_offset: usize,
     pub results: Vec<CommandMatch>,
+    /// Availability context (current screen + selections) captured when the
+    /// palette opens. The screen can't change while the palette is open, so it
+    /// stays valid for the duration; used to hide commands that don't apply
+    /// here (e.g. workbench-only actions off the Alerts screen).
+    context: CommandContext,
 }
 
 impl Default for CommandPaletteState {
@@ -26,23 +32,26 @@ impl Default for CommandPaletteState {
             selected_index: 0,
             scroll_offset: 0,
             results: Vec::new(),
+            context: CommandContext::default(),
         }
     }
 }
 
 impl CommandPaletteState {
-    pub fn open_fuzzy(&mut self) {
+    pub fn open_fuzzy(&mut self, ctx: &CommandContext) {
         self.is_open = true;
         self.mode = PaletteMode::Fuzzy;
+        self.context = ctx.clone();
         self.input.clear();
         self.selected_index = 0;
         self.scroll_offset = 0;
         self.refresh_results();
     }
 
-    pub fn open_colon(&mut self) {
+    pub fn open_colon(&mut self, ctx: &CommandContext) {
         self.is_open = true;
         self.mode = PaletteMode::Colon;
+        self.context = ctx.clone();
         self.input.clear();
         self.input.push(':');
         self.selected_index = 0;
@@ -113,6 +122,6 @@ impl CommandPaletteState {
     }
 
     fn refresh_results(&mut self) {
-        self.results = super::matcher::match_commands(&self.input);
+        self.results = super::matcher::match_commands(&self.input, &self.context);
     }
 }

@@ -1,5 +1,5 @@
 use super::command::Command;
-use super::registry::ALL_COMMANDS;
+use super::registry::{is_available, ALL_COMMANDS, CommandContext};
 
 #[derive(Debug, Clone)]
 pub struct CommandMatch {
@@ -33,11 +33,12 @@ pub fn tokenize(input: &str) -> Vec<&str> {
     input.split_whitespace().collect()
 }
 
-pub fn match_commands(input: &str) -> Vec<CommandMatch> {
+pub fn match_commands(input: &str, ctx: &CommandContext) -> Vec<CommandMatch> {
     let normalized = normalize_input(input);
     if normalized.is_empty() {
         return ALL_COMMANDS
             .iter()
+            .filter(|cmd| is_available(cmd, ctx))
             .map(|cmd| CommandMatch {
                 command: cmd.clone(),
                 score: 0,
@@ -48,6 +49,7 @@ pub fn match_commands(input: &str) -> Vec<CommandMatch> {
     let tokens = tokenize(&normalized);
     let mut matches: Vec<CommandMatch> = ALL_COMMANDS
         .iter()
+        .filter(|cmd| is_available(cmd, ctx))
         .filter_map(|cmd| score_command(cmd, &tokens, &normalized))
         .collect();
 

@@ -96,6 +96,12 @@ pub enum CommandAvailability {
     WhenAlertSelected,
     WhenKeywordSelected,
     WhenNotificationRouteConfigured(NotificationRouteKind),
+    /// Available only on a specific screen (e.g. workbench-only commands that
+    /// manipulate the split-pane layout and have no meaning elsewhere).
+    WhenScreen(Screen),
+    /// Available only on a specific screen *and* when an alert is selected
+    /// (e.g. workbench triage actions).
+    WhenScreenAlertSelected(Screen),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
