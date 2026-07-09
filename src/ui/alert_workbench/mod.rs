@@ -17,6 +17,7 @@ pub mod alert_details;
 pub mod alert_list;
 pub mod context_tabs;
 pub mod layout;
+pub mod page;
 pub mod state;
 pub mod view_models;
 

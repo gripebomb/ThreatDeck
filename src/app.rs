@@ -16,7 +16,7 @@ use crate::ui::alert_workbench::view_models::{
     AlertDetailViewModel, AlertListItem, AlertWorkbenchBundle, EnrichmentViewModel,
     IndicatorViewModel, TriageEventViewModel,
 };
-use crate::ui::alert_workbench::AlertFilterState;
+use crate::ui::alert_workbench::{AlertFilterState, AlertWorkbenchState};
 use crate::ui::command_palette::{AppAction, CommandAction, CommandId, CommandPalette, ModalKind};
 use std::sync::mpsc;
 
@@ -214,6 +214,11 @@ pub struct App {
     pub triage_note_input: String,
     pub triage_input_target: crate::types::TriageInputTarget,
 
+    // Alert workbench (split-pane view)
+    pub workbench: AlertWorkbenchState,
+    pub workbench_items: Vec<AlertListItem>,
+    pub workbench_bundle: Option<AlertWorkbenchBundle>,
+
     // Articles
     pub articles_list: Vec<FeedItemWithFeed>,
     pub articles_selected: usize,
@@ -333,6 +338,9 @@ impl App {
             triage_note_input_mode: false,
             triage_note_input: String::new(),
             triage_input_target: crate::types::TriageInputTarget::default(),
+            workbench: AlertWorkbenchState::new(),
+            workbench_items: Vec::new(),
+            workbench_bundle: None,
             articles_list: Vec::new(),
             articles_selected: 0,
             articles_filter: String::new(),
@@ -389,6 +397,7 @@ impl App {
         app.refresh_dashboard();
         app.refresh_feeds();
         app.refresh_alerts();
+        app.refresh_workbench();
         app.refresh_articles();
         app.refresh_indicators();
         app.refresh_enrichment_queue();
@@ -491,7 +500,7 @@ impl App {
         match screen {
             Screen::Dashboard => self.refresh_dashboard(),
             Screen::Feeds => self.refresh_feeds(),
-            Screen::Alerts => self.refresh_alerts(),
+            Screen::Alerts => self.refresh_workbench(),
             Screen::Articles => self.refresh_articles(),
             Screen::Indicators => self.refresh_indicators(),
             Screen::EnrichmentQueue => self.refresh_enrichment_queue(),
@@ -642,7 +651,7 @@ impl App {
                 match self.screen {
                     Screen::Dashboard => self.refresh_dashboard(),
                     Screen::Feeds => self.refresh_feeds(),
-                    Screen::Alerts => self.refresh_alerts(),
+                    Screen::Alerts => self.refresh_workbench(),
                     Screen::Articles => self.refresh_articles(),
                     Screen::Indicators => self.refresh_indicators(),
                     Screen::EnrichmentQueue => self.refresh_enrichment_queue(),
@@ -1182,7 +1191,7 @@ impl App {
     fn refresh_current_filter_screen(&mut self) {
         match self.screen {
             Screen::Feeds => self.refresh_feeds(),
-            Screen::Alerts => self.refresh_alerts(),
+            Screen::Alerts => self.refresh_workbench(),
             Screen::Articles => self.refresh_articles(),
             Screen::Indicators => self.refresh_indicators(),
             Screen::EnrichmentQueue => self.refresh_enrichment_queue(),
@@ -1265,7 +1274,7 @@ impl App {
         match self.screen {
             Screen::Dashboard => ui::dashboard::handle_key(self, key),
             Screen::Feeds => ui::feeds::handle_key(self, key),
-            Screen::Alerts => ui::alerts::handle_key(self, key),
+            Screen::Alerts => ui::alert_workbench::page::handle_key(self, key),
             Screen::Articles => ui::articles::handle_key(self, key),
             Screen::Indicators => ui::indicators::handle_key(self, key),
             Screen::EnrichmentQueue => ui::enrichment_queue::handle_key(self, key),
@@ -1449,6 +1458,59 @@ impl App {
         alert_id: i64,
     ) -> Result<Option<AlertWorkbenchBundle>> {
         load_alert_workbench_bundle(&self.db, alert_id)
+    }
+
+    // ── Alert workbench lifecycle ─────────────────────────────────────────────
+    //
+    // `refresh_workbench` reloads the list (preserving the selected alert id
+    // where possible) and the selected alert's context bundle. It syncs the
+    // workbench filter from the global `/`-filter fields so the existing filter
+    // bar drives the workbench.
+
+    /// Reload the alert list + selected-alert bundle for the workbench.
+    pub fn refresh_workbench(&mut self) {
+        self.workbench.alert_filter = AlertFilterState {
+            text: self.alerts_filter.clone(),
+            severity: self.alerts_filter_criticality,
+            status: self.alerts_filter_status,
+            disposition: self.alerts_filter_disposition,
+            unread_only: self.alerts_filter_unread_only,
+            hide_closed: self.alerts_hide_closed,
+        };
+        if let Ok(items) = self.load_alert_workbench_items(&self.workbench.alert_filter) {
+            self.workbench
+                .restore_selection_by_id(items.len(), |i| items.get(i).map(|x| x.id));
+            self.workbench_items = items;
+        }
+        self.workbench_sync_selection();
+        self.refresh_workbench_bundle();
+    }
+
+    /// Reload the bundle for the currently selected alert (no list reload).
+    pub fn refresh_workbench_bundle(&mut self) {
+        self.workbench_bundle = match self.workbench.selected_alert_id {
+            Some(id) => self.load_selected_alert_bundle(id).ok().flatten(),
+            None => None,
+        };
+    }
+
+    /// Call after a selection move: sync the selected id from the (clamped)
+    /// index, reset detail/context scroll, and reload the bundle.
+    pub fn workbench_reload_selected(&mut self) {
+        self.workbench_sync_selection();
+        self.workbench.reset_scroll_for_selection_change();
+        self.refresh_workbench_bundle();
+    }
+
+    /// Clamp the selection index to the list and derive `selected_alert_id`.
+    fn workbench_sync_selection(&mut self) {
+        let len = self.workbench_items.len();
+        self.workbench
+            .set_selected_index(self.workbench.selected_alert_index, len);
+        self.workbench.selected_alert_id = self
+            .workbench_items
+            .get(self.workbench.selected_alert_index)
+            .map(|i| i.id);
     }
 
     pub fn refresh_articles(&mut self) {

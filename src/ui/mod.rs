@@ -38,7 +38,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     match app.screen {
         crate::types::Screen::Dashboard => dashboard::draw(f, app),
         crate::types::Screen::Feeds => feeds::draw(f, app),
-        crate::types::Screen::Alerts => alerts::draw(f, app),
+        crate::types::Screen::Alerts => alert_workbench::page::draw(f, app),
         crate::types::Screen::Articles => articles::draw(f, app),
         crate::types::Screen::Indicators => indicators::draw(f, app),
         crate::types::Screen::EnrichmentQueue => enrichment_queue::draw(f, app),
