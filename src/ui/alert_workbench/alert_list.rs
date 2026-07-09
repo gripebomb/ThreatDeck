@@ -85,9 +85,11 @@ pub fn draw_alert_list(
 
     let mut table_state = TableState::default();
     table_state.select(Some(state.selected_alert_index.min(items.len() - 1)));
-    // `select` resets the offset, so apply scroll afterwards.
-    *table_state.offset_mut() = state.alert_list_scroll;
-
+    // The stateful `Table` clamps its own offset to the last row and scrolls
+    // the viewport to keep the selected row visible (`Table::visible_rows`),
+    // so no manual offset/clamp is needed here — list navigation is purely
+    // selection-driven (j/k), and the stored `alert_list_scroll` stays at its
+    // default. See `selection_below_viewport_is_scrolled_into_view`.
     let table = Table::new(rows, column_constraints(compact))
         .header(header)
         .block(block)
@@ -486,5 +488,53 @@ mod tests {
         // Should render without panicking even at minuscule sizes.
         let _ = render_rows(&items, &state, 8, 3);
         let _ = render_rows(&[], &state, 6, 3);
+    }
+
+    // ── Selection stays visible + scroll is clamped (Issue #3 regression) ────
+    //
+    // ratatui's stateful `Table` clamps its offset to the last row and scrolls
+    // the viewport to keep the selected row visible (`Table::visible_rows`),
+    // so the list needs no manual scroll bookkeeping. These tests lock that in
+    // so a future change (or a ratatui upgrade) can't silently regress it.
+
+    fn many_items(n: usize) -> Vec<AlertListItem> {
+        (0..n)
+            .map(|i| {
+                item(
+                    (i + 1) as i64,
+                    &format!("Row{i:02}"),
+                    Criticality::High,
+                    AlertStatus::New,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn selection_below_viewport_is_scrolled_into_view() {
+        let items = many_items(30);
+        // 12-row terminal => ~9 body rows; select the last alert.
+        let state = state_with_selection(29, true);
+        let text = joined(&render_rows(&items, &state, 80, 12));
+        // The selected last row must be on screen; the first row scrolled off.
+        assert!(text.contains("Row29"), "selected row must be visible:\n{text}");
+        assert!(
+            !text.contains("Row00"),
+            "top row should have scrolled off:\n{text}"
+        );
+    }
+
+    #[test]
+    fn unbounded_stored_scroll_keeps_selection_visible() {
+        let items = many_items(30);
+        let mut state = state_with_selection(0, true);
+        // A pathologically large stored scroll must not push the selection
+        // off-screen or scroll past the end of the list.
+        state.alert_list_scroll = 9999;
+        let text = joined(&render_rows(&items, &state, 80, 12));
+        assert!(
+            text.contains("Row00"),
+            "top selection must stay visible:\n{text}"
+        );
     }
 }

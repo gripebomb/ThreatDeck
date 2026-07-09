@@ -452,6 +452,7 @@ impl App {
                     } => {
                         self.refresh_dashboard();
                         self.refresh_alerts();
+                        self.refresh_workbench();
                         self.refresh_articles();
                         self.refresh_indicators();
                         self.refresh_feeds();
@@ -1267,6 +1268,7 @@ impl App {
                 self.tags_assignment_target = None;
                 self.refresh_feeds();
                 self.refresh_alerts();
+                self.refresh_workbench();
                 self.refresh_keywords();
                 self.set_notification("Tags updated".into(), NotificationType::Success);
             }
@@ -1348,6 +1350,7 @@ impl App {
                     let _ = self.db.delete_keyword(id);
                     self.refresh_keywords();
                     self.refresh_alerts();
+                    self.refresh_workbench();
                     self.set_notification("Keyword deleted".into(), NotificationType::Success);
                 }
                 ConfirmDialog::DeleteTag { id, .. } => {
@@ -1358,6 +1361,7 @@ impl App {
                 ConfirmDialog::DeleteAlert { id } => {
                     let _ = self.db.delete_alert(id);
                     self.refresh_alerts();
+                    self.refresh_workbench();
                     self.refresh_indicators();
                     self.refresh_dashboard();
                     self.set_notification("Alert deleted".into(), NotificationType::Success);
@@ -1370,6 +1374,7 @@ impl App {
                                 NotificationType::Success,
                             );
                             self.refresh_alerts();
+                            self.refresh_workbench();
                             self.refresh_indicators();
                             self.refresh_dashboard();
                         }
@@ -1390,6 +1395,7 @@ impl App {
                             self.alerts_bulk_mode = false;
                             self.alerts_selected_bulk.clear();
                             self.refresh_alerts();
+                            self.refresh_workbench();
                             self.refresh_indicators();
                             self.refresh_dashboard();
                             self.set_notification(
@@ -1680,6 +1686,7 @@ impl App {
                         self.refresh_feeds();
                         self.refresh_articles();
                         self.refresh_alerts();
+                        self.refresh_workbench();
                         self.refresh_indicators();
                         self.refresh_dashboard();
                         self.refresh_logs();

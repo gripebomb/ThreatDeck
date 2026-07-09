@@ -85,9 +85,16 @@ pub fn reopen(app: &mut App) {
     let Some(id) = app.workbench.selected_alert_id else {
         return;
     };
-    let _ = app.db.reopen_alert(id, None);
-    app.refresh_workbench();
-    app.set_notification("Alert reopened".into(), NotificationType::Success);
+    match app.db.reopen_alert(id, None) {
+        Ok(()) => {
+            app.refresh_workbench();
+            app.set_notification("Alert reopened".into(), NotificationType::Success);
+        }
+        Err(e) => app.set_notification(
+            format!("Failed to reopen alert: {e}"),
+            NotificationType::Error,
+        ),
+    }
 }
 
 /// Close the selected alert (`C`). Requires a non-`Unknown` disposition; if
@@ -103,10 +110,19 @@ pub fn close(app: &mut App) {
         .map(|d| d.disposition);
     match disposition {
         Some(d) if d != AlertDisposition::Unknown => {
-            let _ = app.db.close_alert(id, d, None);
-            let _ = app.db.mark_alert_read(id, true);
+            let res = app
+                .db
+                .close_alert(id, d, None)
+                .and_then(|()| app.db.mark_alert_read(id, true));
+            // Refresh so the panes reflect whatever actually persisted.
             app.refresh_workbench();
-            app.set_notification("Alert closed".into(), NotificationType::Success);
+            match res {
+                Ok(()) => app.set_notification("Alert closed".into(), NotificationType::Success),
+                Err(e) => app.set_notification(
+                    format!("Failed to close alert: {e}"),
+                    NotificationType::Error,
+                ),
+            }
         }
         _ => app.set_notification(
             "Set a disposition first (T)".into(),
@@ -119,10 +135,19 @@ fn set_status(app: &mut App, status: AlertStatus, msg: &str, typ: NotificationTy
     let Some(id) = app.workbench.selected_alert_id else {
         return;
     };
-    let _ = app.db.update_alert_status(id, status, None);
-    let _ = app.db.mark_alert_read(id, true);
+    let res = app
+        .db
+        .update_alert_status(id, status, None)
+        .and_then(|()| app.db.mark_alert_read(id, true));
+    // Refresh so the panes reflect whatever actually persisted.
     app.refresh_workbench();
-    app.set_notification(msg.into(), typ);
+    match res {
+        Ok(()) => app.set_notification(msg.into(), typ),
+        Err(e) => app.set_notification(
+            format!("Failed to update alert: {e}"),
+            NotificationType::Error,
+        ),
+    }
 }
 
 // ── Enum selectors (status / disposition / severity) ────────────────────
@@ -151,21 +176,23 @@ fn handle_enum_select_key(app: &mut App, key: KeyEvent) {
                 match target {
                     TriageEnumTarget::Status => {
                         if let Some((s, label)) = status_options().get(idx).copied() {
-                            let _ = app.db.update_alert_status(id, s, None);
-                            let _ = app.db.mark_alert_read(id, true);
-                            finish_enum(app, format!("Status: {label}"));
+                            let res = app
+                                .db
+                                .update_alert_status(id, s, None)
+                                .and_then(|()| app.db.mark_alert_read(id, true));
+                            finish_enum(app, res, format!("Status: {label}"));
                         }
                     }
                     TriageEnumTarget::Disposition => {
                         if let Some((d, label)) = disposition_options().get(idx).copied() {
-                            let _ = app.db.update_alert_disposition(id, d, None);
-                            finish_enum(app, format!("Disposition: {label}"));
+                            let res = app.db.update_alert_disposition(id, d, None);
+                            finish_enum(app, res, format!("Disposition: {label}"));
                         }
                     }
                     TriageEnumTarget::Severity => {
                         if let Some((sev, label)) = severity_options().get(idx).copied() {
-                            let _ = app.db.update_alert_severity(id, Some(sev), None);
-                            finish_enum(app, format!("Severity: {label}"));
+                            let res = app.db.update_alert_severity(id, Some(sev), None);
+                            finish_enum(app, res, format!("Severity: {label}"));
                         }
                     }
                 }
@@ -176,9 +203,15 @@ fn handle_enum_select_key(app: &mut App, key: KeyEvent) {
     }
 }
 
-fn finish_enum(app: &mut App, msg: String) {
+fn finish_enum(app: &mut App, res: anyhow::Result<()>, msg: String) {
     app.refresh_workbench();
-    app.set_notification(msg, NotificationType::Success);
+    match res {
+        Ok(()) => app.set_notification(msg, NotificationType::Success),
+        Err(e) => app.set_notification(
+            format!("Failed to update alert: {e}"),
+            NotificationType::Error,
+        ),
+    }
 }
 
 fn cancel_enum(app: &mut App) {
@@ -239,22 +272,26 @@ fn handle_note_input_key(app: &mut App, key: KeyEvent) {
             let text = app.triage_note_input.trim().to_string();
             if !text.is_empty() {
                 if let Some(id) = app.workbench.selected_alert_id {
-                    match app.triage_input_target {
+                    let (res, ok_msg): (anyhow::Result<()>, String) = match app.triage_input_target
+                    {
                         TriageInputTarget::Note => {
-                            let _ = app.db.add_alert_note(id, &text);
-                            app.set_notification("Note saved".into(), NotificationType::Success);
+                            (app.db.add_alert_note(id, &text), "Note saved".to_string())
                         }
-                        TriageInputTarget::Owner => {
-                            let _ = app.db.assign_alert_owner(id, Some(&text), None);
-                            app.set_notification(
-                                format!("Owner set to {text}"),
-                                NotificationType::Success,
-                            );
-                        }
-                    }
+                        TriageInputTarget::Owner => (
+                            app.db.assign_alert_owner(id, Some(&text), None),
+                            format!("Owner set to {text}"),
+                        ),
+                    };
                     // Note/owner don't affect list ordering/filter, so just
                     // refresh the bundle (keeps the detail scroll position).
                     app.refresh_workbench_bundle();
+                    match res {
+                        Ok(()) => app.set_notification(ok_msg, NotificationType::Success),
+                        Err(e) => app.set_notification(
+                            format!("Failed to save: {e}"),
+                            NotificationType::Error,
+                        ),
+                    }
                 }
             }
             cancel_note(app);

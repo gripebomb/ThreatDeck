@@ -237,6 +237,12 @@ fn fmt_time(dt: DateTime<Utc>) -> String {
 /// Word-wrap `text` to at most `width` chars per line, preserving explicit
 /// newlines as paragraph breaks. Used to make line counts (and thus scroll
 /// clamping) accurate for long free-text.
+///
+/// Unbroken tokens longer than `width` (hashes, URLs, base64 blobs) are
+/// hard-broken into `width`-sized chunks so a single long word can't make a
+/// line taller than `width` chars. Without this, `content_lines` undercounts
+/// the rendered height and `max_scroll` clamps to 0, trapping long snippets
+/// out of view (see `wraps_unbroken_long_word`).
 fn wrap_text(text: &str, width: usize) -> Vec<String> {
     if width == 0 {
         return vec![text.to_string()];
@@ -246,9 +252,14 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
         let mut line = String::new();
         let mut len = 0usize;
         for word in paragraph.split_whitespace() {
-            let word_len = word.chars().count();
+            // Break an over-long token into `width`-sized chunks. The first
+            // chunk may still join the current line; the rest each start a
+            // fresh line.
+            let mut chunks = split_long_word(word, width);
+            let first = chunks.remove(0);
+            let first_len = first.chars().count();
             let separator = if line.is_empty() { 0 } else { 1 };
-            if !line.is_empty() && len + separator + word_len > width {
+            if !line.is_empty() && len + separator + first_len > width {
                 out.push(std::mem::take(&mut line));
                 len = 0;
             }
@@ -256,8 +267,14 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
                 line.push(' ');
                 len += 1;
             }
-            line.push_str(word);
-            len += word_len;
+            line.push_str(&first);
+            len += first_len;
+            // Remaining hard-broken chunks each occupy their own line.
+            for chunk in chunks {
+                out.push(std::mem::take(&mut line));
+                line.push_str(&chunk);
+                len = chunk.chars().count();
+            }
         }
         out.push(line);
     }
@@ -265,6 +282,19 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
         out.push(String::new());
     }
     out
+}
+
+/// Break `word` into chunks of at most `width` chars. Short words come back as
+/// a single chunk; over-long tokens are split so no chunk exceeds `width`.
+fn split_long_word(word: &str, width: usize) -> Vec<String> {
+    let chars: Vec<char> = word.chars().collect();
+    if chars.len() <= width {
+        return vec![word.to_string()];
+    }
+    chars
+        .chunks(width)
+        .map(|c| c.iter().collect::<String>())
+        .collect()
 }
 
 #[cfg(test)]
@@ -368,6 +398,31 @@ mod tests {
         let text = render_text(Some(&detail), &focused_state(), 60, 24);
         // Must not panic; a prefix of the long snippet is visible.
         assert!(text.contains("xxxxx"));
+    }
+
+    #[test]
+    fn long_unbroken_snippet_is_scrollable_into_view() {
+        // Regression for the reported blocker: an unbroken long token used to
+        // make wrap_text emit a single over-long line, so `content_lines`
+        // undercounted and `max_scroll` clamped to 0 — the tail of the snippet
+        // could never be scrolled into view. Now the token is split and the
+        // later portion becomes reachable by scrolling.
+        let mut detail = sample_detail();
+        // Mark the tail so we can detect it after scrolling.
+        detail.snippet = format!("{}TAILMARKER", "x".repeat(2000));
+
+        // At scroll 0 the tail marker is off-screen.
+        let top = render_text(Some(&detail), &focused_state(), 40, 12);
+        assert!(!top.contains("TAILMARKER"), "tail should be below the fold:\n{top}");
+
+        // After scrolling well past the top, the tail marker comes into view.
+        let mut state = focused_state();
+        state.right_detail_scroll = 220;
+        let scrolled = render_text(Some(&detail), &state, 40, 12);
+        assert!(
+            scrolled.contains("TAILMARKER"),
+            "long snippet tail must be scrollable into view:\n{scrolled}"
+        );
     }
 
     #[test]
@@ -484,5 +539,53 @@ mod tests {
         let detail = sample_detail();
         let _ = render_text(Some(&detail), &focused_state(), 10, 4);
         let _ = render_text(None, &focused_state(), 8, 3);
+    }
+
+    // ── wrap_text: unbroken long words must be split (Issue #4) ───────────────
+    #[test]
+    fn wraps_unbroken_long_word() {
+        // A single 2000-char token (hash/base64/URL) must be broken into
+        // width-sized lines, none longer than `width`.
+        let width = 40usize;
+        let token = "A".repeat(2000);
+        let lines = wrap_text(&token, width);
+        assert!(lines.len() >= 50, "expected many lines, got {}", lines.len());
+        for l in &lines {
+            assert!(l.chars().count() <= width, "line exceeds width: {}", l.len());
+        }
+        // The whole token is preserved across the chunks.
+        let joined: String = lines.join("");
+        assert_eq!(joined, token);
+    }
+
+    #[test]
+    fn wrap_text_mixed_words_and_long_token() {
+        // Normal words wrap normally; an over-long URL is hard-broken.
+        let width = 20usize;
+        let text = "see https://example.com/very/long/path/that/keeps/going/and/going";
+        let lines = wrap_text(text, width);
+        for l in &lines {
+            assert!(l.chars().count() <= width, "line exceeds width: {l}");
+        }
+        // The URL can't join "see" without overflowing width 20, so "see"
+        // sits alone on the first line and the URL starts on the next.
+        assert_eq!(lines[0], "see");
+        assert!(lines[1].starts_with("https://"));
+        // No information is lost: every character of the URL is present across
+        // the wrapped chunks (the space before it is intentional word spacing).
+        let url = "https://example.com/very/long/path/that/keeps/going/and/going";
+        let url_joined: String = lines[1..].concat();
+        assert_eq!(url_joined, url);
+    }
+
+    #[test]
+    fn wrap_text_preserves_paragraph_breaks() {
+        let lines = wrap_text("line one\nline two", 80);
+        assert_eq!(lines, vec!["line one".to_string(), "line two".to_string()]);
+    }
+
+    #[test]
+    fn wrap_text_empty_returns_single_empty_line() {
+        assert_eq!(wrap_text("", 10), vec!["".to_string()]);
     }
 }
