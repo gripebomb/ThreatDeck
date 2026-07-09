@@ -100,6 +100,39 @@ fn empty_query_returns_all_commands() {
 }
 
 #[test]
+fn workbench_commands_are_searchable() {
+    // Pane focus via the palette (no 1/2/3 key binding exists).
+    let focus_cases: &[(&str, CommandId)] = &[
+        ("focus list", CommandId::AlertFocusList),
+        ("focus details", CommandId::AlertFocusDetails),
+        ("focus context", CommandId::AlertFocusContext),
+    ];
+    // Context tabs.
+    let tab_cases: &[(&str, CommandId)] = &[
+        ("tab indicators", CommandId::AlertTabIndicators),
+        ("tab metadata", CommandId::AlertTabMetadata),
+        ("tab enrichment", CommandId::AlertTabEnrichment),
+        ("tab history", CommandId::AlertTabHistory),
+        ("tab raw", CommandId::AlertTabRaw),
+    ];
+    // One-shot triage.
+    let triage_cases: &[(&str, CommandId)] = &[
+        ("acknowledge", CommandId::AlertAcknowledge),
+        ("investigate", CommandId::AlertInvestigate),
+        ("escalate", CommandId::AlertEscalate),
+        ("close", CommandId::AlertClose),
+        ("reopen", CommandId::AlertReopen),
+    ];
+    for (query, expected) in focus_cases.iter().chain(tab_cases).chain(triage_cases) {
+        let results = matcher::match_commands(query);
+        assert!(
+            results.iter().any(|m| m.command.id == *expected),
+            "query {query:?} should find {expected:?}"
+        );
+    }
+}
+
+#[test]
 fn search_by_canonical() {
     let results = matcher::match_commands("feed check all");
     assert!(

@@ -32,6 +32,21 @@ pub enum CommandId {
     AlertExportVisibleMarkdown,
     FeedHealthExportMarkdown,
 
+    // Workbench navigation + triage (Ticket 10).
+    AlertFocusList,
+    AlertFocusDetails,
+    AlertFocusContext,
+    AlertTabIndicators,
+    AlertTabMetadata,
+    AlertTabEnrichment,
+    AlertTabHistory,
+    AlertTabRaw,
+    AlertAcknowledge,
+    AlertInvestigate,
+    AlertEscalate,
+    AlertClose,
+    AlertReopen,
+
     KeywordAdd,
     KeywordEditSelected,
     KeywordTestSelected,
@@ -123,6 +138,21 @@ pub enum AppAction {
     AlertExportSelectedMarkdown,
     AlertExportVisibleMarkdown,
     FeedHealthExportMarkdown,
+
+    // Workbench navigation + triage (Ticket 10).
+    AlertFocusList,
+    AlertFocusDetails,
+    AlertFocusContext,
+    AlertTabIndicators,
+    AlertTabMetadata,
+    AlertTabEnrichment,
+    AlertTabHistory,
+    AlertTabRaw,
+    AlertAcknowledge,
+    AlertInvestigate,
+    AlertEscalate,
+    AlertClose,
+    AlertReopen,
 
     KeywordAdd,
     KeywordEditSelected,

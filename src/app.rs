@@ -12,11 +12,14 @@ use crate::db::{
 use crate::theme::{get_runtime_theme, Theme};
 use crate::types::*;
 use crate::ui;
+use crate::ui::alert_workbench::triage;
 use crate::ui::alert_workbench::view_models::{
     AlertDetailViewModel, AlertListItem, AlertWorkbenchBundle, EnrichmentViewModel,
     IndicatorViewModel, TriageEventViewModel,
 };
-use crate::ui::alert_workbench::{AlertFilterState, AlertWorkbenchState};
+use crate::ui::alert_workbench::{
+    AlertContextTab, AlertFilterState, AlertPane, AlertWorkbenchState,
+};
 use crate::ui::command_palette::{AppAction, CommandAction, CommandId, CommandPalette, ModalKind};
 use std::sync::mpsc;
 
@@ -652,6 +655,43 @@ impl App {
         }
     }
 
+    // ── Workbench palette actions (Ticket 10) ─────────────────────────────
+
+    /// Switch to the Alerts workbench and set pane focus.
+    fn focus_workbench_pane(&mut self, pane: AlertPane, label: &str) {
+        self.switch_screen(Screen::Alerts);
+        self.workbench.focused_pane = pane;
+        self.set_notification(
+            format!("Focus: {label}"),
+            crate::types::NotificationType::Info,
+        );
+    }
+
+    /// Switch to the Alerts workbench and select a context tab.
+    fn select_workbench_tab(&mut self, tab: AlertContextTab, label: &str) {
+        self.switch_screen(Screen::Alerts);
+        self.workbench.bottom_tab = tab;
+        self.workbench.reset_context_scroll();
+        self.set_notification(
+            format!("Tab: {label}"),
+            crate::types::NotificationType::Info,
+        );
+    }
+
+    /// Switch to the Alerts workbench and run a one-shot triage action on the
+    /// selected alert. Warns if nothing is selected.
+    fn run_workbench_triage(&mut self, action: fn(&mut App)) {
+        self.switch_screen(Screen::Alerts);
+        if self.workbench.selected_alert_id.is_some() {
+            action(self);
+        } else {
+            self.set_notification(
+                "No alert selected".to_string(),
+                crate::types::NotificationType::Warning,
+            );
+        }
+    }
+
     fn handle_app_action(&mut self, action: AppAction) {
         match action {
             AppAction::Refresh => {
@@ -764,7 +804,6 @@ impl App {
             }
             AppAction::AlertShowUnread => {
                 self.alerts_filter_unread_only = true;
-                self.refresh_alerts();
                 self.switch_screen(Screen::Alerts);
                 self.set_notification(
                     "Showing unread alerts".to_string(),
@@ -773,7 +812,6 @@ impl App {
             }
             AppAction::AlertShowCritical => {
                 self.alerts_filter_criticality = Some(crate::types::Criticality::Critical);
-                self.refresh_alerts();
                 self.switch_screen(Screen::Alerts);
                 self.set_notification(
                     "Showing critical alerts".to_string(),
@@ -781,9 +819,9 @@ impl App {
                 );
             }
             AppAction::AlertMarkSelectedRead => {
-                if let Some(a) = self.alerts_list.get(self.alerts_selected) {
-                    let _ = self.db.mark_alert_read(a.alert.id, true);
-                    self.refresh_alerts();
+                if let Some(id) = self.workbench.selected_alert_id {
+                    let _ = self.db.mark_alert_read(id, true);
+                    self.refresh_workbench();
                     self.refresh_dashboard();
                     self.set_notification(
                         "Alert marked as read".to_string(),
@@ -797,9 +835,9 @@ impl App {
                 }
             }
             AppAction::AlertMarkSelectedUnread => {
-                if let Some(a) = self.alerts_list.get(self.alerts_selected) {
-                    let _ = self.db.mark_alert_read(a.alert.id, false);
-                    self.refresh_alerts();
+                if let Some(id) = self.workbench.selected_alert_id {
+                    let _ = self.db.mark_alert_read(id, false);
+                    self.refresh_workbench();
                     self.refresh_dashboard();
                     self.set_notification(
                         "Alert marked as unread".to_string(),
@@ -814,7 +852,7 @@ impl App {
             }
             AppAction::AlertMarkVisibleRead => {
                 let _ = self.db.mark_all_alerts_read(true);
-                self.refresh_alerts();
+                self.refresh_workbench();
                 self.refresh_dashboard();
                 self.set_notification(
                     "All alerts marked as read".to_string(),
@@ -822,43 +860,10 @@ impl App {
                 );
             }
             AppAction::AlertExportSelectedMarkdown => {
-                if let Some(alert) = self.alerts_list.get(self.alerts_selected) {
-                    let report_service = crate::report::ReportService::new();
-                    let options = threatdeck_report::ReportExportOptions {
-                        report_type: threatdeck_report::ReportType::Alert,
-                        format: threatdeck_report::ExportFormat::Markdown,
-                        output_path: None,
-                        include_raw_content: false,
-                        include_metadata: true,
-                        include_iocs: true,
-                        include_enrichment: true,
-                        include_triage_history: true,
-                        include_feed_health: false,
-                        include_tags: true,
-                        redact_secrets: true,
-                        overwrite: false,
-                        generated_by: None,
-                    };
-                    let export_dir = self.paths.data_dir.join("exports");
-                    match report_service.export_alert_report(
-                        &self.db,
-                        alert.alert.id,
-                        &options,
-                        &export_dir,
-                    ) {
-                        Ok(result) => {
-                            self.set_notification(
-                                format!("Exported: {}", result.path.display()),
-                                crate::types::NotificationType::Success,
-                            );
-                        }
-                        Err(e) => {
-                            self.set_notification(
-                                format!("Export failed: {}", e),
-                                crate::types::NotificationType::Error,
-                            );
-                        }
-                    }
+                if self.workbench.selected_alert_id.is_some() {
+                    // Reuse the workbench exporter (operates on the selected
+                    // alert and notifies with the path / error).
+                    crate::ui::alert_workbench::triage::export_selected(self);
                 } else {
                     self.set_notification(
                         "No alert selected".to_string(),
@@ -898,20 +903,29 @@ impl App {
                     generated_by: None,
                 };
                 let export_dir = self.paths.data_dir.join("exports");
+                // Re-query with the workbench's current filter so the export
+                // reflects what the user sees (alerts_list is the legacy vec).
+                let alerts = match self.db.list_alerts(&filter) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        self.set_notification(
+                            format!("Export failed: {}", e),
+                            crate::types::NotificationType::Error,
+                        );
+                        return;
+                    }
+                };
+                let count = alerts.len();
                 match report_service.export_visible_alerts_report(
                     &self.db,
-                    &self.alerts_list,
+                    &alerts,
                     &filter,
                     &options,
                     &export_dir,
                 ) {
                     Ok(result) => {
                         self.set_notification(
-                            format!(
-                                "Exported {} alerts: {}",
-                                self.alerts_list.len(),
-                                result.path.display()
-                            ),
+                            format!("Exported {} alerts: {}", count, result.path.display()),
                             crate::types::NotificationType::Success,
                         );
                     }
@@ -923,6 +937,36 @@ impl App {
                     }
                 }
             }
+            // ── Workbench navigation + triage (Ticket 10) ────────────────────────
+            AppAction::AlertFocusList => {
+                self.focus_workbench_pane(AlertPane::AlertList, "alert list")
+            }
+            AppAction::AlertFocusDetails => {
+                self.focus_workbench_pane(AlertPane::AlertDetails, "details")
+            }
+            AppAction::AlertFocusContext => {
+                self.focus_workbench_pane(AlertPane::ContextPanel, "context")
+            }
+            AppAction::AlertTabIndicators => {
+                self.select_workbench_tab(AlertContextTab::Indicators, "Indicators")
+            }
+            AppAction::AlertTabMetadata => {
+                self.select_workbench_tab(AlertContextTab::Metadata, "Metadata")
+            }
+            AppAction::AlertTabEnrichment => {
+                self.select_workbench_tab(AlertContextTab::Enrichment, "Enrichment")
+            }
+            AppAction::AlertTabHistory => {
+                self.select_workbench_tab(AlertContextTab::TriageHistory, "Triage history")
+            }
+            AppAction::AlertTabRaw => {
+                self.select_workbench_tab(AlertContextTab::RawContent, "Raw content")
+            }
+            AppAction::AlertAcknowledge => self.run_workbench_triage(triage::acknowledge),
+            AppAction::AlertInvestigate => self.run_workbench_triage(triage::investigate),
+            AppAction::AlertEscalate => self.run_workbench_triage(triage::escalate),
+            AppAction::AlertClose => self.run_workbench_triage(triage::close),
+            AppAction::AlertReopen => self.run_workbench_triage(triage::reopen),
             AppAction::FeedHealthExportMarkdown => {
                 let report_service = crate::report::ReportService::new();
                 let options = threatdeck_report::ReportExportOptions {
@@ -2197,6 +2241,123 @@ mod workbench_tests {
         // init_schema seeded a demo catalog, so the list is non-empty.
         assert!(!app.workbench_items.is_empty());
 
+        drop(app);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    // ── Command palette dispatch (Ticket 10) ────────────────────────────────
+
+    fn build_app_with_alert(name: &str) -> (App, PathBuf, i64) {
+        let (db, path) = temp_db(name);
+        let (feed_id, keyword_id) = seed_feed_keyword(&db);
+        let id = db
+            .create_alert(&AlertCreate {
+                feed_id,
+                keyword_id,
+                title: Some("PaletteAlert".into()),
+                content_snippet: "s".into(),
+                content_hash: format!("palette-{name}"),
+                criticality: Criticality::High,
+                metadata_json: None,
+            })
+            .unwrap();
+        let paths = Paths {
+            config_dir: PathBuf::new(),
+            data_dir: std::env::temp_dir(),
+            config_file: PathBuf::new(),
+            db_file: path.clone(),
+        };
+        let mut app = App::new(db, AppConfig::default(), paths);
+        app.screen = Screen::Alerts;
+        app.alerts_filter = "PaletteAlert".to_string();
+        app.alerts_hide_closed = false;
+        app.refresh_workbench();
+        (app, path, id)
+    }
+
+    #[test]
+    fn palette_focus_sets_pane_and_switches_screen() {
+        let (mut app, path, _id) = build_app_with_alert("focus");
+        app.screen = Screen::Dashboard; // start on another screen
+        app.handle_app_action(AppAction::AlertFocusDetails);
+        assert_eq!(app.screen, Screen::Alerts);
+        assert_eq!(app.workbench.focused_pane, AlertPane::AlertDetails);
+        drop(app);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn palette_tab_command_switches_context_tab() {
+        let (mut app, path, _id) = build_app_with_alert("tab");
+        app.handle_app_action(AppAction::AlertTabMetadata);
+        assert_eq!(app.workbench.bottom_tab, AlertContextTab::Metadata);
+        app.handle_app_action(AppAction::AlertTabHistory);
+        assert_eq!(app.workbench.bottom_tab, AlertContextTab::TriageHistory);
+        drop(app);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn palette_acknowledge_triages_selected_alert() {
+        let (mut app, path, _id) = build_app_with_alert("ack");
+        app.handle_app_action(AppAction::AlertAcknowledge);
+        let status = app
+            .workbench_bundle
+            .as_ref()
+            .and_then(|b| b.detail.as_ref())
+            .unwrap()
+            .status;
+        assert_eq!(status, crate::types::AlertStatus::Acknowledged);
+        assert_eq!(
+            app.notification.as_ref().unwrap().1,
+            crate::types::NotificationType::Success
+        );
+        drop(app);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn palette_mark_read_uses_workbench_selection() {
+        let (mut app, path, id) = build_app_with_alert("markread");
+        app.handle_app_action(AppAction::AlertMarkSelectedRead);
+        let item = app
+            .workbench_items
+            .iter()
+            .find(|i| i.id == id)
+            .expect("selected alert still in list");
+        assert!(item.read, "selected alert should be marked read");
+        drop(app);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn palette_export_visible_writes_file() {
+        let (mut app, path, _id) = build_app_with_alert("exportvis");
+        app.handle_app_action(AppAction::AlertExportVisibleMarkdown);
+        let notif = app.notification.as_ref().expect("notification set");
+        assert_eq!(notif.1, crate::types::NotificationType::Success);
+        // "Exported N alerts: <path>" — extract the path and verify the file.
+        let msg = &notif.0;
+        let exported = msg.split(':').nth(1).unwrap().trim();
+        assert!(
+            std::path::Path::new(exported).exists(),
+            "visible-export file missing: {exported}"
+        );
+        drop(app);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn palette_triage_without_selection_warns() {
+        let (mut app, path, _id) = build_app_with_alert("notri");
+        app.alerts_filter = "zzzz-none".into();
+        app.refresh_workbench();
+        assert!(app.workbench.selected_alert_id.is_none());
+        app.handle_app_action(AppAction::AlertAcknowledge);
+        assert_eq!(
+            app.notification.as_ref().unwrap().1,
+            crate::types::NotificationType::Warning
+        );
         drop(app);
         let _ = std::fs::remove_file(&path);
     }
