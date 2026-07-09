@@ -41,7 +41,10 @@ impl AlertPane {
     }
 
     fn index_of(self) -> usize {
-        Self::ALL.iter().position(|&p| p == self).unwrap_or(0)
+        Self::ALL
+            .iter()
+            .position(|&p| p == self)
+            .expect("AlertPane::ALL contains every variant")
     }
 
     /// Human-readable title for the focused border.
@@ -92,7 +95,10 @@ impl AlertContextTab {
     }
 
     fn index_of(self) -> usize {
-        Self::ALL.iter().position(|&t| t == self).unwrap_or(0)
+        Self::ALL
+            .iter()
+            .position(|&t| t == self)
+            .expect("AlertContextTab::ALL contains every variant")
     }
 
     pub fn label(self) -> &'static str {
@@ -321,23 +327,22 @@ impl AlertWorkbenchState {
 
     /// Scroll the top-right details pane by `delta` lines, clamped so the last
     /// viewport stays visible. Negative deltas scroll up.
+    ///
+    /// The arithmetic is `i32`-saturating and clamped to `[0, max_scroll]`
+    /// *before* narrowing to `u16`, so a very large positive `delta` can't wrap
+    /// through `u16` and land short of the bottom.
     pub fn scroll_detail(&mut self, delta: i32, content_lines: u16, viewport_lines: u16) {
-        let next = self.right_detail_scroll as i32 + delta;
-        self.right_detail_scroll = if next <= 0 {
-            0
-        } else {
-            clamp_scroll(next as u16, content_lines, viewport_lines)
-        };
+        let max_scroll = content_lines.saturating_sub(viewport_lines) as i32;
+        let next = (self.right_detail_scroll as i32).saturating_add(delta);
+        self.right_detail_scroll = next.clamp(0, max_scroll) as u16;
     }
 
-    /// Scroll the bottom-right context pane by `delta` lines, clamped.
+    /// Scroll the bottom-right context pane by `delta` lines, clamped (see
+    /// [`Self::scroll_detail`] for the overflow-safe clamping).
     pub fn scroll_context(&mut self, delta: i32, content_lines: u16, viewport_lines: u16) {
-        let next = self.bottom_detail_scroll as i32 + delta;
-        self.bottom_detail_scroll = if next <= 0 {
-            0
-        } else {
-            clamp_scroll(next as u16, content_lines, viewport_lines)
-        };
+        let max_scroll = content_lines.saturating_sub(viewport_lines) as i32;
+        let next = (self.bottom_detail_scroll as i32).saturating_add(delta);
+        self.bottom_detail_scroll = next.clamp(0, max_scroll) as u16;
     }
 
     // ── Loading / error ──────────────────────────────────────────────────────

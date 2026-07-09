@@ -140,7 +140,12 @@ fn column_constraints(compact: bool) -> Vec<Constraint> {
     }
 }
 
-fn build_row(item: &AlertListItem, compact: bool, theme: &Theme, now: DateTime<Utc>) -> Row<'static> {
+fn build_row(
+    item: &AlertListItem,
+    compact: bool,
+    theme: &Theme,
+    now: DateTime<Utc>,
+) -> Row<'static> {
     // Unread marker (text glyph, not colour-only).
     let read_mark = if item.read { "○" } else { "●" };
     let read_style = if item.read {
@@ -524,7 +529,10 @@ mod tests {
         let state = state_with_selection(29, true);
         let text = joined(&render_rows(&items, &state, 80, 12));
         // The selected last row must be on screen; the first row scrolled off.
-        assert!(text.contains("Row29"), "selected row must be visible:\n{text}");
+        assert!(
+            text.contains("Row29"),
+            "selected row must be visible:\n{text}"
+        );
         assert!(
             !text.contains("Row00"),
             "top row should have scrolled off:\n{text}"

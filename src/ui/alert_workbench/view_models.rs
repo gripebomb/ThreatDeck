@@ -152,8 +152,11 @@ impl IndicatorViewModel {
     }
 }
 
-/// Shared indicator-type label. `IndicatorType` has no `Display` impl, so this
-/// centralises the mapping used by both the workbench and the existing list UI.
+/// Workbench indicator-type label. `IndicatorType` has no `Display` impl, so
+/// this maps it to a short human-readable word for the workbench's IOCs tab.
+///
+/// Note: the existing indicators screen (`crate::ui::indicators`) keeps its own
+/// duplicate of this mapping; this one is not shared with it.
 pub fn indicator_type_label(indicator_type: IndicatorType) -> &'static str {
     match indicator_type {
         IndicatorType::Ipv4 => "IPv4",

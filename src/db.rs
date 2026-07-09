@@ -2483,8 +2483,7 @@ impl Db {
         if indicator_ids.is_empty() {
             return Ok(out);
         }
-        let placeholders: Vec<String> =
-            indicator_ids.iter().map(|_| "?".to_string()).collect();
+        let placeholders: Vec<String> = indicator_ids.iter().map(|_| "?".to_string()).collect();
         // Per-(indicator, provider) latest result across the requested set.
         // The join keys on all of indicator_id/provider_id/fetched_at so results
         // never bleed across indicators (the single-id query scopes this via
@@ -2513,8 +2512,10 @@ impl Db {
             .map(|id| id as &dyn rusqlite::ToSql)
             .chain(indicator_ids.iter().map(|id| id as &dyn rusqlite::ToSql))
             .collect();
-        let rows =
-            stmt.query_map(rusqlite::params_from_iter(param_refs), Self::row_to_enrichment_result)?;
+        let rows = stmt.query_map(
+            rusqlite::params_from_iter(param_refs),
+            Self::row_to_enrichment_result,
+        )?;
         for row in rows {
             let record = row?;
             out.entry(record.indicator_id).or_default().push(record);

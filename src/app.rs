@@ -13,12 +13,10 @@ use crate::theme::{get_runtime_theme, Theme};
 use crate::types::*;
 use crate::ui;
 use crate::ui::alert_workbench::triage;
-use crate::ui::alert_workbench::view_models::{
-    AlertDetailViewModel, AlertListItem, AlertWorkbenchBundle, EnrichmentViewModel,
-    IndicatorViewModel, TriageEventViewModel,
-};
 use crate::ui::alert_workbench::{
-    AlertContextTab, AlertFilterState, AlertPane, AlertWorkbenchState,
+    AlertContextTab, AlertDetailViewModel, AlertFilterState, AlertListItem, AlertPane,
+    AlertWorkbenchBundle, AlertWorkbenchState, EnrichmentViewModel, IndicatorViewModel,
+    TriageEventViewModel,
 };
 use crate::ui::command_palette::{AppAction, CommandAction, CommandId, CommandPalette, ModalKind};
 use std::sync::mpsc;
@@ -83,16 +81,17 @@ pub fn load_alert_workbench_bundle(db: &Db, alert_id: i64) -> Result<Option<Aler
         .map(|k| k.pattern.clone())
         .unwrap_or_else(|| "(unknown keyword)".to_string());
 
-    let detail =
-        AlertDetailViewModel::from_parts(&alert, feed_name, keyword_pattern, tag_names);
+    let detail = AlertDetailViewModel::from_parts(&alert, feed_name, keyword_pattern, tag_names);
 
     // Indicators, each with its latest enrichment results nested. Fetch the
     // enrichment for all indicators in a single batched query (one round trip)
     // instead of one query per indicator (N+1).
     let indicator_records = db.list_indicators_for_alert(alert.id)?;
     let indicator_ids: Vec<i64> = indicator_records.iter().map(|r| r.id).collect();
-    let mut indicators: Vec<IndicatorViewModel> =
-        indicator_records.iter().map(IndicatorViewModel::from).collect();
+    let mut indicators: Vec<IndicatorViewModel> = indicator_records
+        .iter()
+        .map(IndicatorViewModel::from)
+        .collect();
     let enrichment_by_indicator =
         db.get_latest_enrichment_results_for_indicators(&indicator_ids)?;
     for indicator in &mut indicators {
@@ -1503,16 +1502,21 @@ impl App {
                         }
                     }
                 }
-                ConfirmDialog::DeleteNotification { id, .. } => match self.db.delete_notification(id) {
-                    Ok(()) => {
-                        self.refresh_settings();
-                        self.set_notification("Notification deleted".into(), NotificationType::Success);
+                ConfirmDialog::DeleteNotification { id, .. } => {
+                    match self.db.delete_notification(id) {
+                        Ok(()) => {
+                            self.refresh_settings();
+                            self.set_notification(
+                                "Notification deleted".into(),
+                                NotificationType::Success,
+                            );
+                        }
+                        Err(e) => self.set_notification(
+                            format!("Failed to delete notification: {e}"),
+                            NotificationType::Error,
+                        ),
                     }
-                    Err(e) => self.set_notification(
-                        format!("Failed to delete notification: {e}"),
-                        NotificationType::Error,
-                    ),
-                },
+                }
                 ConfirmDialog::BulkDeleteAlerts { .. } => {
                     let ids: Vec<i64> = self.alerts_selected_bulk.iter().copied().collect();
                     match self.db.delete_alerts_by_ids(&ids) {

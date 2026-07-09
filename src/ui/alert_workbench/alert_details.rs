@@ -316,6 +316,15 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
 /// come back as a single chunk; over-long tokens are split so no chunk exceeds
 /// `width` cells (chunking by cell width, not char count, so wide characters
 /// aren't under-counted).
+/// Break `word` into chunks of at most `width` display cells. Short words
+/// come back as a single chunk; over-long tokens are split so no chunk
+/// exceeds `width` cells (chunking by cell width, not char count, so wide
+/// characters aren't under-counted).
+///
+/// A single character whose own display width exceeds `width` (e.g. a CJK
+/// glyph with a 1-cell budget) can't be split, so it occupies its own chunk
+/// that is necessarily wider than `width` — this is the only over-width case
+/// and it is isolated so it never combines with neighbours.
 fn split_long_word(word: &str, width: usize) -> Vec<String> {
     if str_width(word) <= width {
         return vec![word.to_string()];
@@ -453,7 +462,10 @@ mod tests {
 
         // At scroll 0 the tail marker is off-screen.
         let top = render_text(Some(&detail), &focused_state(), 40, 12);
-        assert!(!top.contains("TAILMARKER"), "tail should be below the fold:\n{top}");
+        assert!(
+            !top.contains("TAILMARKER"),
+            "tail should be below the fold:\n{top}"
+        );
 
         // After scrolling well past the top, the tail marker comes into view.
         let mut state = focused_state();
@@ -575,9 +587,17 @@ mod tests {
         let width = 40usize;
         let token = "A".repeat(2000);
         let lines = wrap_text(&token, width);
-        assert!(lines.len() >= 50, "expected many lines, got {}", lines.len());
+        assert!(
+            lines.len() >= 50,
+            "expected many lines, got {}",
+            lines.len()
+        );
         for l in &lines {
-            assert!(l.chars().count() <= width, "line exceeds width: {}", l.len());
+            assert!(
+                str_width(l) <= width,
+                "line exceeds width: {}",
+                str_width(l)
+            );
         }
         // The whole token is preserved across the chunks.
         let joined: String = lines.join("");
@@ -591,7 +611,7 @@ mod tests {
         let text = "see https://example.com/very/long/path/that/keeps/going/and/going";
         let lines = wrap_text(text, width);
         for l in &lines {
-            assert!(l.chars().count() <= width, "line exceeds width: {l}");
+            assert!(str_width(l) <= width, "line exceeds width: {l}");
         }
         // The URL can't join "see" without overflowing width 20, so "see"
         // sits alone on the first line and the URL starts on the next.
@@ -613,5 +633,27 @@ mod tests {
     #[test]
     fn wrap_text_empty_returns_single_empty_line() {
         assert_eq!(wrap_text("", 10), vec!["".to_string()]);
+    }
+
+    #[test]
+    fn wrap_text_counts_wide_chars_as_two_cells() {
+        // CJK glyphs are 2 display cells each. With a 6-cell budget, three
+        // wide chars (6 cells) fit on one line; a fourth starts a new line
+        // instead of being squeezed in by a char-count of 3 (which would
+        // wrongly fit 2 glyphs in 6 "chars" = 12 cells).
+        let width = 6;
+        let text = "\u{4e2d}\u{6587}\u{6d4b}\u{8bd5}"; // 中文测试
+        let lines = wrap_text(text, width);
+        for l in &lines {
+            assert!(
+                str_width(l) <= width,
+                "wide line exceeds budget: {} cells",
+                str_width(l)
+            );
+        }
+        // Each line holds at most 3 glyphs (6 cells); 4 glyphs => 2 lines.
+        assert_eq!(lines.len(), 2);
+        assert_eq!(str_width(&lines[0]), 6);
+        assert_eq!(str_width(&lines[1]), 2);
     }
 }

@@ -137,7 +137,10 @@ fn workbench_triage_commands_require_selection_on_alerts() {
         .iter()
         .map(|m| m.command.id)
         .collect();
-    assert!(ids.contains(&CommandId::AlertFocusList), "focus is screen-gated");
+    assert!(
+        ids.contains(&CommandId::AlertFocusList),
+        "focus is screen-gated"
+    );
     assert!(
         !ids.contains(&CommandId::AlertAcknowledge),
         "triage needs a selected alert"
@@ -241,9 +244,7 @@ fn search_by_alias() {
 fn search_by_keyword() {
     let results = matcher::match_commands("sources", &CommandContext::default());
     assert!(
-        results
-            .iter()
-            .any(|m| m.command.id == CommandId::OpenFeeds),
+        results.iter().any(|m| m.command.id == CommandId::OpenFeeds),
         "Should find OpenFeeds via keyword"
     );
 }

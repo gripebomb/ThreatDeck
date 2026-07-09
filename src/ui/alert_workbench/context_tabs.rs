@@ -96,8 +96,9 @@ pub fn draw_context_panel(
         ),
         AlertContextTab::RawContent => match bundle.raw_content.as_deref() {
             Some(raw) if !raw.trim().is_empty() => {
-                // Clamp scroll so the view can't run past the content.
-                let content_lines = raw.lines().count() as u16;
+                // Clamp scroll by wrapped visual rows so the view can't run
+                // past the content (and a long wrapped line stays scrollable).
+                let content_lines = wrapped_line_count(raw, body.width);
                 let max_scroll = content_lines.saturating_sub(body.height);
                 let p = Paragraph::new(raw)
                     .style(Style::default().fg(theme.fg))
@@ -207,7 +208,9 @@ fn draw_metadata_tab(
         return;
     };
     let pretty = pretty_json(raw);
-    let content_lines = pretty.lines().count() as u16;
+    // Count wrapped visual rows (not logical lines) so a long JSON value that
+    // wraps across many rows can be scrolled through to the bottom.
+    let content_lines = wrapped_line_count(&pretty, area.width);
     let max_scroll = content_lines.saturating_sub(area.height);
     let paragraph = Paragraph::new(pretty)
         .style(Style::default().fg(theme.fg))
@@ -269,6 +272,23 @@ fn pretty_json(raw: &str) -> String {
         .unwrap_or_else(|| raw.to_string())
 }
 
+/// Number of visual (wrapped) rows `text` occupies when rendered into a column
+/// of `width` cells. Used to clamp scroll on `.wrap()`-enabled paragraphs
+/// (metadata / raw content), where the logical line count undercounts the
+/// rendered height and the bottom rows can't be scrolled into view. Display
+/// width via `Span::width` so wide characters count as 2 cells.
+fn wrapped_line_count(text: &str, width: u16) -> u16 {
+    let w = (width as usize).max(1);
+    let mut total: u16 = 0;
+    for line in text.lines() {
+        let line_w = Span::from(line).width();
+        let rows = if line_w == 0 { 1 } else { line_w.div_ceil(w) };
+        total = total.saturating_add(rows as u16);
+    }
+    // Empty text still renders as a single (blank) row.
+    total.max(1)
+}
+
 fn render_block_message(
     f: &mut Frame,
     area: Rect,
@@ -307,15 +327,17 @@ mod tests {
             confidence: Some(80),
             risk: Some(50),
             enrichment: reputation
-                .map(|r| crate::ui::alert_workbench::view_models::EnrichmentViewModel {
-                    provider_id: 1,
-                    status: "succeeded".into(),
-                    reputation: Some(r.into()),
-                    score: Some(95),
-                    verdict: None,
-                    summary: None,
-                    fetched_at: chrono::Utc::now(),
-                })
+                .map(
+                    |r| crate::ui::alert_workbench::view_models::EnrichmentViewModel {
+                        provider_id: 1,
+                        status: "succeeded".into(),
+                        reputation: Some(r.into()),
+                        score: Some(95),
+                        verdict: None,
+                        summary: None,
+                        fetched_at: chrono::Utc::now(),
+                    },
+                )
                 .into_iter()
                 .collect(),
         }
@@ -667,5 +689,63 @@ mod tests {
             let _ = render_text(Some(&bundle), &state_on_tab(tab), 12, 5);
         }
         let _ = render_text(None, &state_on_tab(AlertContextTab::Indicators), 8, 3);
+    }
+
+    // ── wrapped_line_count + scroll-clamp limits (#17) ─────────────────────
+
+    #[test]
+    fn wrapped_line_count_fits_one_row() {
+        // A short line within `width` is one row.
+        assert_eq!(wrapped_line_count("short", 80), 1);
+        assert_eq!(
+            wrapped_line_count(
+                "a
+b
+c", 80
+            ),
+            3
+        );
+    }
+
+    #[test]
+    fn wrapped_line_count_wraps_long_lines() {
+        // 20 chars in a 10-col column => 2 rows; two such lines => 4 rows.
+        assert_eq!(wrapped_line_count(&"x".repeat(20), 10), 2);
+        assert_eq!(
+            wrapped_line_count(&format!("{}\n{}", "x".repeat(20), "y".repeat(20)), 10),
+            4
+        );
+    }
+
+    #[test]
+    fn wrapped_line_count_empty_is_one_row() {
+        assert_eq!(wrapped_line_count("", 80), 1);
+    }
+
+    #[test]
+    fn metadata_wrap_scroll_reaches_long_tail() {
+        // A single logical JSON line wrapping across many rows must be
+        // scrollable to its tail (the clamp uses wrapped rows, not logical
+        // lines, so max_scroll stays positive).
+        let long = format!(r#"{{"long":"{}"}}"#, "z".repeat(2000));
+        let bundle = bundle_with(vec![], Some(&long), vec![]);
+        let mut state = state_on_tab(AlertContextTab::Metadata);
+
+        // Top: the opening of the value is visible, the tail isn't.
+        let top = render_text(Some(&bundle), &state, 30, 7);
+        assert!(top.contains('z'), "value prefix should render\n{top}");
+        assert!(!top.contains("TAIL"), "tail not yet rendered");
+
+        // Mark the tail so we can detect it after scrolling.
+        let long = format!(r#"{{"long":"{}TAIL"}}"#, "z".repeat(2000));
+        let bundle = bundle_with(vec![], Some(&long), vec![]);
+        // Scroll well past the top: the tail comes into view only because the
+        // clamp uses the (large) wrapped row count, not 1 logical line.
+        state.bottom_detail_scroll = 300;
+        let scrolled = render_text(Some(&bundle), &state, 30, 7);
+        assert!(
+            scrolled.contains("TAIL"),
+            "wrapped metadata tail must be scrollable into view:\n{scrolled}"
+        );
     }
 }

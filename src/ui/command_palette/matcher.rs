@@ -1,5 +1,5 @@
 use super::command::Command;
-use super::registry::{is_available, ALL_COMMANDS, CommandContext};
+use super::registry::{is_available, CommandContext, ALL_COMMANDS};
 
 #[derive(Debug, Clone)]
 pub struct CommandMatch {

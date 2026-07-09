@@ -1,31 +1,29 @@
 //! Split-pane alert workbench: the live `Screen::Alerts` view.
 //!
-//! This module groups everything behind the three-pane alert workbench:
-//! - [`state`] — pane focus, context tabs, selection, scroll, filters.
-//! - [`view_models`] — TUI view models and the selected-alert data bundle.
-//! - [`layout`] — wide/narrow/tiny terminal layout engine (internal).
-//! - [`alert_list`] / [`alert_details`] / [`context_tabs`] — pane renderers.
-//! - [`page`] — assembles the panes and wires keyboard navigation.
-//! - [`triage`] — analyst triage/export actions.
+//! Public entry points are [`page`] (rendering + keyboard wiring) and
+//! [`triage`] (analyst actions). Everything else — [`state`], [`view_models`],
+//! [`layout`], and the per-pane renderers ([`alert_list`] / [`alert_details`] /
+//! [`context_tabs`]) — is internal and reached only through the type re-exports
+//! below, so callers outside this module can't depend on renderer internals.
 //!
 //! See `docs/MASTER_PLAN.md` and `docs/ARCHITECTURE.md`.
 
+mod alert_details;
+mod alert_list;
+mod context_tabs;
 mod layout;
+mod state;
+mod view_models;
 
-pub mod alert_details;
-pub mod alert_list;
-pub mod context_tabs;
 pub mod page;
-pub mod state;
 pub mod triage;
-pub mod view_models;
 
-// Re-export only the items consumed outside this module via the
-// `alert_workbench::<name>` path. Submodule types that are only used internally
-// (e.g. `layout::classify`, `state::clamp_scroll`) stay module-private.
+// Re-export the items consumed outside this module. Internal-only items (e.g.
+// `layout::classify`, `state::clamp_scroll`, the renderer functions) stay
+// module-private behind this surface.
 pub use layout::{compute_layout, LayoutMode};
 pub use state::{AlertContextTab, AlertFilterState, AlertPane, AlertWorkbenchState};
 pub use view_models::{
-    AlertDetailViewModel, AlertListItem, AlertWorkbenchBundle, IndicatorViewModel,
-    TriageEventViewModel,
+    AlertDetailViewModel, AlertListItem, AlertWorkbenchBundle, EnrichmentViewModel,
+    IndicatorViewModel, TriageEventViewModel,
 };
