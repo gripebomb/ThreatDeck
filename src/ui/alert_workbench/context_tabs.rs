@@ -180,8 +180,12 @@ fn draw_indicators_tab(
     )
     .header(header);
 
+    // Clamp the row offset so the table can't scroll past the last row
+    // (one row is the header).
+    let visible_rows = (area.height.saturating_sub(1)) as usize;
+    let max_offset = indicators.len().saturating_sub(visible_rows);
     let mut table_state = TableState::default();
-    *table_state.offset_mut() = scroll as usize;
+    *table_state.offset_mut() = (scroll as usize).min(max_offset);
     f.render_stateful_widget(table, area, &mut table_state);
 }
 
@@ -197,9 +201,11 @@ fn draw_metadata_tab(
         return;
     };
     let pretty = pretty_json(raw);
+    let content_lines = pretty.lines().count() as u16;
+    let max_scroll = content_lines.saturating_sub(area.height);
     let paragraph = Paragraph::new(pretty)
         .style(Style::default().fg(theme.fg))
-        .scroll((scroll, 0));
+        .scroll((scroll.min(max_scroll), 0));
     f.render_widget(paragraph, area);
 }
 
@@ -240,9 +246,11 @@ fn draw_history_tab(
         ]));
     }
 
+    let content_lines = lines.len() as u16;
+    let max_scroll = content_lines.saturating_sub(area.height);
     let paragraph = Paragraph::new(lines)
         .style(Style::default().fg(theme.fg))
-        .scroll((scroll, 0));
+        .scroll((scroll.min(max_scroll), 0));
     f.render_widget(paragraph, area);
 }
 

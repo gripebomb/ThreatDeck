@@ -11,7 +11,7 @@
 //!
 //! See `docs/MASTER_PLAN.md` (Phase 2) and `docs/ARCHITECTURE.md`.
 
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
@@ -25,6 +25,7 @@ use crate::ui::alert_workbench::alert_list::draw_alert_list;
 use crate::ui::alert_workbench::context_tabs::draw_context_panel;
 use crate::ui::alert_workbench::state::AlertPane;
 use crate::ui::alert_workbench::{compute_layout, LayoutMode};
+use crate::ui::list::{motion_from_key, move_selection};
 
 /// Render the assembled split-pane alert workbench.
 ///
@@ -116,7 +117,7 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
     };
     let tab = app.workbench.bottom_tab.label();
     let hint = format!(
-        " j/k move · Tab focus · [/] tabs · J/K scroll · r refresh · / filter · ? help · q quit   [Focus: {focus} | Tab: {tab}] "
+        " j/k move · Tab focus · [/] tabs · J/K or Ctrl-d/u scroll · r refresh · / filter · ? help · q quit   [Focus: {focus} | Tab: {tab}] "
     );
     let bar = Paragraph::new(hint).style(
         Style::default()
@@ -127,53 +128,69 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(bar, area);
 }
 
-/// Minimal workbench navigation. Global keys (screen switching, quit, help,
-/// filter, command palette, Esc) are handled earlier in `App::handle_key`.
+/// Half-page scroll increment (matches the shared list motion helper).
+const SCROLL_HALF: i32 = 10;
+
+/// Workbench keyboard navigation (Ticket 07). Global keys (screen switching,
+/// quit, help, filter, command palette, Esc) are handled earlier in
+/// `App::handle_key` and never reach here.
+///
+/// Model: `j/k/arrows/gg/G/Ctrl-d/u` move the alert-list selection (the primary
+/// navigation) regardless of focus; `J/K/Ctrl-d/u/PgUp/Dn` scroll the focused
+/// details/context pane; `Tab/Shift+Tab` cycle pane focus; `[/]` cycle context
+/// tabs; `r` refreshes.
+///
+/// Note: the ticket's `1/2/3` direct-pane-focus mapping is intentionally NOT
+/// bound — `1`/`2`/`3` are the app's global screen-switch hotkeys. Focus is
+/// handled by `Tab`/`Shift+Tab`.
 pub fn handle_key(app: &mut App, key: KeyEvent) {
     let len = app.workbench_items.len();
-    match key.code {
-        // Alert selection (also auto-loads the selected alert's bundle).
-        KeyCode::Char('j') | KeyCode::Down => {
-            app.workbench.move_selection_down(len);
-            app.workbench_reload_selected();
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            app.workbench.move_selection_up(len);
-            app.workbench_reload_selected();
-        }
-        KeyCode::Char('g') => {
-            app.workbench.move_selection_top(len);
-            app.workbench_reload_selected();
-        }
-        KeyCode::Char('G') => {
-            app.workbench.move_selection_bottom(len);
-            app.workbench_reload_selected();
-        }
 
-        // Pane focus cycling.
+    // 1) Pane-local scrolling when a scrollable pane (details/context) is focused.
+    if app.workbench.focused_pane != AlertPane::AlertList {
+        if let Some(delta) = scroll_delta(key) {
+            scroll_focused(app, delta);
+            return;
+        }
+    }
+
+    // 2) Alert-list selection via the shared motion helper (j/k/arrows/gg/G/
+    //    Ctrl-d/u). Also reloads the selected alert's bundle.
+    if let Some(motion) = motion_from_key(key, &mut app.pending_g) {
+        app.workbench.selected_alert_index =
+            move_selection(app.workbench.selected_alert_index, len, motion);
+        app.workbench_reload_selected();
+        return;
+    }
+
+    // 3) Pane focus, context tabs, refresh.
+    match key.code {
         KeyCode::Tab => app.workbench.focus_next_pane(),
         KeyCode::BackTab => app.workbench.focus_prev_pane(),
-
-        // Context tab cycling.
         KeyCode::Char(']') => app.workbench.cycle_tab_forward(),
         KeyCode::Char('[') => app.workbench.cycle_tab_backward(),
-
-        // Refresh (reloads list, preserving the selected alert where possible).
         KeyCode::Char('r') => app.refresh_workbench(),
-
-        // Pane-local scroll for details/context (free scroll; precise clamping
-        // with render-time heights lands in Ticket 07).
-        KeyCode::Char('J') => scroll_focused(app, 4),
-        KeyCode::Char('K') => scroll_focused(app, -4),
-
         _ => {}
     }
 }
 
-/// Scroll the focused details/context pane. The list pane is selection-driven.
+/// Translate a scroll key (only meaningful for details/context panes) to a
+/// line delta, if any.
+fn scroll_delta(key: KeyEvent) -> Option<i32> {
+    match key.code {
+        KeyCode::Char('J') => Some(1),
+        KeyCode::Char('K') => Some(-1),
+        KeyCode::PageDown => Some(SCROLL_HALF),
+        KeyCode::PageUp => Some(-SCROLL_HALF),
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(SCROLL_HALF),
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(-SCROLL_HALF),
+        _ => None,
+    }
+}
+
+/// Scroll the focused details/context pane. The stored offset is unbounded
+/// here; each renderer clamps the *displayed* offset to its content height.
 fn scroll_focused(app: &mut App, delta: i32) {
-    // content_lines is unbounded here so the user can scroll freely; the
-    // renderer simply applies the offset.
     const UNBOUNDED: u16 = u16::MAX;
     match app.workbench.focused_pane {
         AlertPane::AlertDetails => app.workbench.scroll_detail(delta, UNBOUNDED, 1),
@@ -249,6 +266,9 @@ mod tests {
         };
         let mut app = App::new(db, AppConfig::default(), paths);
         app.screen = Screen::Alerts;
+        // init_schema seeds a demo catalog; filter to only the alerts we seeded
+        // so list lengths are deterministic.
+        app.alerts_filter = "Alert #".to_string();
         app.refresh_workbench();
         (app, path)
     }
@@ -352,6 +372,126 @@ mod tests {
             KeyEvent::new(KeyCode::Char(']'), KeyModifiers::NONE),
         );
         assert_ne!(app.workbench.bottom_tab, first_tab);
+        drop(app);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn gg_top_and_shift_g_bottom() {
+        let (mut app, path) = build_app("gg", 5);
+        // Move down a few first.
+        for _ in 0..3 {
+            handle_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+            );
+        }
+        assert_eq!(app.workbench.selected_alert_index, 3);
+        // `gg` jumps to top.
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
+        );
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
+        );
+        assert_eq!(app.workbench.selected_alert_index, 0);
+        // `G` jumps to bottom.
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('G'), KeyModifiers::NONE),
+        );
+        assert_eq!(app.workbench.selected_alert_index, 4);
+        drop(app);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn ctrl_d_moves_list_selection_half_page() {
+        let (mut app, path) = build_app("ctrld", 5);
+        assert_eq!(app.workbench.focused_pane, AlertPane::AlertList);
+        assert_eq!(app.workbench.selected_alert_index, 0);
+        // Ctrl-d on the list moves the selection (clamped to the last row).
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(app.workbench.selected_alert_index, 4);
+        drop(app);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn refresh_preserves_selected_alert() {
+        let (mut app, path) = build_app("preserve", 5);
+        // Move to a known alert and remember its id.
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        );
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        );
+        let selected = app.workbench.selected_alert_id;
+        let index = app.workbench.selected_alert_index;
+        assert!(selected.is_some());
+
+        // Refresh keeps the same alert selected (by id).
+        app.refresh_workbench();
+        assert_eq!(app.workbench.selected_alert_id, selected);
+        assert_eq!(app.workbench.selected_alert_index, index);
+        drop(app);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn scrolling_keys_scroll_focused_details_pane() {
+        let (mut app, path) = build_app("scroll", 2);
+        // Focus the details pane.
+        handle_key(&mut app, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(app.workbench.focused_pane, AlertPane::AlertDetails);
+        assert_eq!(app.workbench.right_detail_scroll, 0);
+        // J scrolls down one line.
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('J'), KeyModifiers::NONE),
+        );
+        assert_eq!(app.workbench.right_detail_scroll, 1);
+        // K scrolls back up.
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('K'), KeyModifiers::NONE),
+        );
+        assert_eq!(app.workbench.right_detail_scroll, 0);
+        drop(app);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn empty_list_does_not_panic_on_keys() {
+        let (mut app, path) = build_app("nokeys", 0);
+        app.alerts_filter = "zzzz-no-such-alert".into();
+        app.refresh_workbench();
+        assert!(app.workbench_items.is_empty());
+        assert!(app.workbench.selected_alert_id.is_none());
+
+        // None of these should panic; selection stays empty/None.
+        for code in [
+            KeyCode::Char('j'),
+            KeyCode::Char('k'),
+            KeyCode::Down,
+            KeyCode::Up,
+            KeyCode::Tab,
+            KeyCode::Char(']'),
+            KeyCode::Char('r'),
+            KeyCode::Char('G'),
+        ] {
+            handle_key(&mut app, KeyEvent::new(code, KeyModifiers::NONE));
+        }
+        assert!(app.workbench.selected_alert_id.is_none());
+        assert_eq!(app.workbench.selected_alert_index, 0);
         drop(app);
         let _ = std::fs::remove_file(path);
     }

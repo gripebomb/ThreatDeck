@@ -65,17 +65,32 @@ pub fn draw_alert_details(
         return;
     };
 
-    let lines = build_detail_lines(detail, theme);
+    let inner = block.inner(area);
+    let width = inner.width.max(1) as usize;
+    let lines = build_detail_lines(detail, width, theme);
+
+    // Clamp the applied scroll so the view never runs past the content. The
+    // stored offset may be larger; only the displayed offset is bounded.
+    let content_lines = lines.len() as u16;
+    let max_scroll = content_lines.saturating_sub(inner.height);
+    let effective_scroll = state.right_detail_scroll.min(max_scroll);
+
     let content = Paragraph::new(lines)
         .style(Style::default().fg(theme.fg))
         .wrap(Wrap { trim: false })
-        .scroll((state.right_detail_scroll, 0))
+        .scroll((effective_scroll, 0))
         .block(block);
     f.render_widget(content, area);
 }
 
-/// Compose the full detail view as styled lines.
-fn build_detail_lines(detail: &AlertDetailViewModel, theme: &Theme) -> Vec<Line<'static>> {
+/// Compose the full detail view as styled lines. `width` is used to pre-wrap
+/// long free-text (title/snippet/notes) so the line count — and thus scroll
+/// clamping — stays accurate.
+fn build_detail_lines(
+    detail: &AlertDetailViewModel,
+    width: usize,
+    theme: &Theme,
+) -> Vec<Line<'static>> {
     let muted = Style::default().fg(theme.muted);
     let mut lines: Vec<Line<'static>> = Vec::new();
 
@@ -84,10 +99,10 @@ fn build_detail_lines(detail: &AlertDetailViewModel, theme: &Theme) -> Vec<Line<
         .title
         .clone()
         .unwrap_or_else(|| "(untitled alert)".to_string());
-    lines.push(Line::from(Span::styled(
-        title,
-        Style::default().fg(theme.fg).add_modifier(Modifier::BOLD),
-    )));
+    let title_style = Style::default().fg(theme.fg).add_modifier(Modifier::BOLD);
+    for wrap in wrap_text(&title, width) {
+        lines.push(Line::from(Span::styled(wrap, title_style)));
+    }
 
     lines.push(Line::default());
 
@@ -142,9 +157,11 @@ fn build_detail_lines(detail: &AlertDetailViewModel, theme: &Theme) -> Vec<Line<
 
     lines.push(Line::default());
 
-    // ── Snippet (wrapped, long content handled by Wrap) ────────────────────
+    // ── Snippet (pre-wrapped so scrolling clamps correctly) ────────────────
     lines.push(Line::from(Span::styled("Snippet", muted)));
-    lines.push(Line::from(detail.snippet.clone()));
+    for wrap in wrap_text(&detail.snippet, width) {
+        lines.push(Line::from(wrap));
+    }
 
     lines.push(Line::default());
 
@@ -152,7 +169,9 @@ fn build_detail_lines(detail: &AlertDetailViewModel, theme: &Theme) -> Vec<Line<
     if let Some(notes) = &detail.triage_notes {
         if !notes.trim().is_empty() {
             lines.push(Line::from(Span::styled("Triage notes", muted)));
-            lines.push(Line::from(notes.clone()));
+            for wrap in wrap_text(notes, width) {
+                lines.push(Line::from(wrap));
+            }
             lines.push(Line::default());
         }
     }
@@ -198,6 +217,39 @@ fn field(label: &str, value: &str, theme: &Theme) -> Line<'static> {
 
 fn fmt_time(dt: DateTime<Utc>) -> String {
     dt.format("%Y-%m-%d %H:%M:%S").to_string()
+}
+
+/// Word-wrap `text` to at most `width` chars per line, preserving explicit
+/// newlines as paragraph breaks. Used to make line counts (and thus scroll
+/// clamping) accurate for long free-text.
+fn wrap_text(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![text.to_string()];
+    }
+    let mut out = Vec::new();
+    for paragraph in text.split('\n') {
+        let mut line = String::new();
+        let mut len = 0usize;
+        for word in paragraph.split_whitespace() {
+            let word_len = word.chars().count();
+            let separator = if line.is_empty() { 0 } else { 1 };
+            if !line.is_empty() && len + separator + word_len > width {
+                out.push(std::mem::take(&mut line));
+                len = 0;
+            }
+            if !line.is_empty() {
+                line.push(' ');
+                len += 1;
+            }
+            line.push_str(word);
+            len += word_len;
+        }
+        out.push(line);
+    }
+    if out.is_empty() {
+        out.push(String::new());
+    }
+    out
 }
 
 #[cfg(test)]
