@@ -13,7 +13,7 @@ use ratatui::{
     layout::{Alignment, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph},
     Frame,
 };
 
@@ -23,8 +23,8 @@ use crate::ui::list::criticality_label;
 
 /// Render the top-right alert details pane into `area`.
 ///
-/// Precedence: loading indicator > no-selection empty state > detail content.
-/// Scrolling follows `state.right_detail_scroll`; the focused border follows
+/// Precedence: error > no-selection empty state > detail content. Scrolling
+/// follows `state.right_detail_scroll`; the focused border follows
 /// `state.focused_pane`.
 pub fn draw_alert_details(
     f: &mut Frame,
@@ -49,7 +49,7 @@ pub fn draw_alert_details(
                 .add_modifier(Modifier::BOLD),
         );
 
-    // Precedence: error > loading > no-selection > content.
+    // Precedence: error > no-selection > content.
     if let Some(err) = &state.last_error {
         let msg = format!("⚠ Couldn't load this alert:\n\n{err}");
         let error = Paragraph::new(msg)
@@ -57,15 +57,6 @@ pub fn draw_alert_details(
             .alignment(Alignment::Center)
             .block(block);
         f.render_widget(error, area);
-        return;
-    }
-
-    if state.is_loading_details {
-        let loading = Paragraph::new("Loading alert details…")
-            .style(Style::default().fg(theme.muted))
-            .alignment(Alignment::Center)
-            .block(block);
-        f.render_widget(loading, area);
         return;
     }
 
@@ -92,7 +83,6 @@ pub fn draw_alert_details(
 
     let content = Paragraph::new(lines)
         .style(Style::default().fg(theme.fg))
-        .wrap(Wrap { trim: false })
         .scroll((effective_scroll, 0))
         .block(block);
     f.render_widget(content, area);
@@ -154,9 +144,10 @@ fn build_detail_lines(
             .unwrap_or_else(|| "—".to_string()),
         theme,
     ));
-    lines.push(field(
+    lines.extend(field_lines(
         "Owner",
         detail.owner.as_deref().unwrap_or("—"),
+        width,
         theme,
     ));
 
@@ -168,17 +159,18 @@ fn build_detail_lines(
     } else {
         detail.tags.join(", ")
     };
-    lines.push(field("Tags", &tags_value, theme));
+    lines.extend(field_lines("Tags", &tags_value, width, theme));
 
     lines.push(Line::default());
 
     // ── Snippet (pre-wrapped so scrolling clamps correctly) ────────────────
-    lines.push(Line::from(Span::styled("Snippet", muted)));
-    for wrap in wrap_text(&detail.snippet, width) {
-        lines.push(Line::from(wrap));
+    if !detail.snippet.trim().is_empty() {
+        lines.push(Line::from(Span::styled("Snippet", muted)));
+        for wrap in wrap_text(&detail.snippet, width) {
+            lines.push(Line::from(wrap));
+        }
+        lines.push(Line::default());
     }
-
-    lines.push(Line::default());
 
     // ── Triage notes (only when present) ───────────────────────────────────
     if let Some(notes) = &detail.triage_notes {
@@ -215,14 +207,15 @@ fn build_detail_lines(
     if let Some(url) = &detail.source_url {
         if !url.is_empty() {
             lines.push(Line::default());
-            lines.push(field("Source", url, theme));
+            lines.extend(field_lines("Source", url, width, theme));
         }
     }
 
     lines
 }
 
-/// A labelled field line: muted label + fg value.
+/// A labelled field that fits on one line (value known to be short: feed,
+/// keyword, status, timestamps). Muted label + fg value.
 fn field(label: &str, value: &str, theme: &Theme) -> Line<'static> {
     Line::from(vec![
         Span::styled(format!("{label}: "), Style::default().fg(theme.muted)),
@@ -230,19 +223,54 @@ fn field(label: &str, value: &str, theme: &Theme) -> Line<'static> {
     ])
 }
 
+/// A labelled field whose value may exceed the pane width (URLs, tag lists,
+/// owner emails). The value is wrapped to the space left after the label on
+/// the first line, so every line fits `width` — no reliance on
+/// `Paragraph::wrap`, keeping the rendered line count (and scroll clamping)
+/// accurate. The label is muted on the first line.
+fn field_lines(label: &str, value: &str, width: usize, theme: &Theme) -> Vec<Line<'static>> {
+    let muted = Style::default().fg(theme.muted);
+    let fg = Style::default().fg(theme.fg);
+    let prefix = format!("{label}: ");
+    // Wrap the value to the width remaining after the label on line 0.
+    let budget = width.saturating_sub(str_width(&prefix)).max(1);
+    wrap_text(value, budget)
+        .into_iter()
+        .enumerate()
+        .map(|(i, chunk)| {
+            if i == 0 {
+                Line::from(vec![
+                    Span::styled(prefix.clone(), muted),
+                    Span::styled(chunk, fg),
+                ])
+            } else {
+                Line::from(Span::styled(chunk, fg))
+            }
+        })
+        .collect()
+}
+
+/// Display (cell) width of `s`, honouring wide characters. Uses ratatui's own
+/// unicode-width accounting so no extra dependency is needed.
+fn str_width(s: &str) -> usize {
+    ratatui::text::Span::from(s).width()
+}
+
 fn fmt_time(dt: DateTime<Utc>) -> String {
     dt.format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
-/// Word-wrap `text` to at most `width` chars per line, preserving explicit
-/// newlines as paragraph breaks. Used to make line counts (and thus scroll
-/// clamping) accurate for long free-text.
+/// Word-wrap `text` to at most `width` display cells per line, preserving
+/// explicit newlines as paragraph breaks. Used to make line counts (and thus
+/// scroll clamping) accurate for long free-text.
 ///
-/// Unbroken tokens longer than `width` (hashes, URLs, base64 blobs) are
-/// hard-broken into `width`-sized chunks so a single long word can't make a
-/// line taller than `width` chars. Without this, `content_lines` undercounts
-/// the rendered height and `max_scroll` clamps to 0, trapping long snippets
-/// out of view (see `wraps_unbroken_long_word`).
+/// Width accounting uses display (cell) width via [`str_width`], so wide
+/// (e.g. CJK) characters count as 2 cells. Unbroken tokens longer than
+/// `width` (hashes, URLs, base64 blobs) are hard-broken into `width`-sized
+/// chunks so a single long word can't make a line taller than `width` cells.
+/// Without this, `content_lines` undercounts the rendered height and
+/// `max_scroll` clamps to 0, trapping long snippets out of view (see
+/// `wraps_unbroken_long_word`).
 fn wrap_text(text: &str, width: usize) -> Vec<String> {
     if width == 0 {
         return vec![text.to_string()];
@@ -252,12 +280,12 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
         let mut line = String::new();
         let mut len = 0usize;
         for word in paragraph.split_whitespace() {
-            // Break an over-long token into `width`-sized chunks. The first
+            // Break an over-long token into `width`-cell chunks. The first
             // chunk may still join the current line; the rest each start a
             // fresh line.
             let mut chunks = split_long_word(word, width);
             let first = chunks.remove(0);
-            let first_len = first.chars().count();
+            let first_len = str_width(&first);
             let separator = if line.is_empty() { 0 } else { 1 };
             if !line.is_empty() && len + separator + first_len > width {
                 out.push(std::mem::take(&mut line));
@@ -273,7 +301,7 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
             for chunk in chunks {
                 out.push(std::mem::take(&mut line));
                 line.push_str(&chunk);
-                len = chunk.chars().count();
+                len = str_width(&chunk);
             }
         }
         out.push(line);
@@ -284,17 +312,30 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
     out
 }
 
-/// Break `word` into chunks of at most `width` chars. Short words come back as
-/// a single chunk; over-long tokens are split so no chunk exceeds `width`.
+/// Break `word` into chunks of at most `width` display cells. Short words
+/// come back as a single chunk; over-long tokens are split so no chunk exceeds
+/// `width` cells (chunking by cell width, not char count, so wide characters
+/// aren't under-counted).
 fn split_long_word(word: &str, width: usize) -> Vec<String> {
-    let chars: Vec<char> = word.chars().collect();
-    if chars.len() <= width {
+    if str_width(word) <= width {
         return vec![word.to_string()];
     }
-    chars
-        .chunks(width)
-        .map(|c| c.iter().collect::<String>())
-        .collect()
+    let mut chunks = Vec::new();
+    let mut cur = String::new();
+    let mut cur_w = 0usize;
+    for ch in word.chars() {
+        let cw = str_width(&ch.to_string());
+        if cur_w + cw > width && !cur.is_empty() {
+            chunks.push(std::mem::take(&mut cur));
+            cur_w = 0;
+        }
+        cur.push(ch);
+        cur_w += cw;
+    }
+    if !cur.is_empty() {
+        chunks.push(cur);
+    }
+    chunks
 }
 
 #[cfg(test)]
@@ -311,7 +352,6 @@ mod tests {
             id: 42,
             title: Some("Ransomware campaign detected".to_string()),
             feed_name: "IOCFeed".to_string(),
-            feed_url: Some("https://ioc.example.test/feed.xml".to_string()),
             keyword_pattern: "ransomware".to_string(),
             severity: Criticality::High,
             base_criticality: Criticality::High,
@@ -458,20 +498,6 @@ mod tests {
             "empty state missing:\n{text}"
         );
         assert!(text.contains("Alert Details"), "border title missing");
-    }
-
-    #[test]
-    fn shows_loading_state_when_loading() {
-        let mut state = focused_state();
-        state.is_loading_details = true;
-        let detail = sample_detail();
-        let text = render_text(Some(&detail), &state, 70, 16);
-        assert!(
-            text.contains("Loading alert details"),
-            "loading state missing:\n{text}"
-        );
-        // Should not render the detail content while loading.
-        assert!(!text.contains("Ransomware campaign"));
     }
 
     #[test]

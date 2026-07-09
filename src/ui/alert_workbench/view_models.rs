@@ -1,10 +1,11 @@
 //! TUI view models for the split-pane alert workbench.
 //!
 //! These types decouple rendering from raw database row shapes. This module
-//! depends only on domain types ([`crate::types`]); it never imports storage
-//! row types. Storage rows are converted to these view models in the app layer
-//! (`crate::app`), which is the only place that touches storage. Rendering code
-//! consumes these view models exclusively.
+//! depends on domain types ([`crate::types`]) plus [`sentinel_ioc::IndicatorType`]
+//! for the indicator view model; it never imports storage row types. Storage
+//! rows are converted to these view models in the app layer (`crate::app`),
+//! which is the only place that touches storage. Rendering code consumes these
+//! view models exclusively.
 //!
 //! See `docs/ARCHITECTURE.md` (Responsibility Boundaries) and
 //! `tickets/02-workbench-view-models-and-data-bundle.md`.
@@ -17,7 +18,7 @@ use crate::types::{Alert, AlertDisposition, AlertStatus, AlertWithMeta, Critical
 // ── Alert list ───────────────────────────────────────────────────────────────
 
 /// A single row in the left alert-list pane. Rendered, never the raw DB shape.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct AlertListItem {
     pub id: i64,
     pub title: Option<String>,
@@ -53,12 +54,11 @@ impl From<&AlertWithMeta> for AlertListItem {
 
 /// Top-right selected-alert detail payload. Built by the app service from an
 /// [`Alert`] plus its feed/keyword/tags context.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct AlertDetailViewModel {
     pub id: i64,
     pub title: Option<String>,
     pub feed_name: String,
-    pub feed_url: Option<String>,
     pub keyword_pattern: String,
     /// Effective severity (honours a `severity_override`).
     pub severity: Criticality,
@@ -90,7 +90,6 @@ impl AlertDetailViewModel {
     pub fn from_parts(
         alert: &Alert,
         feed_name: String,
-        feed_url: Option<String>,
         keyword_pattern: String,
         tags: Vec<String>,
     ) -> Self {
@@ -98,7 +97,6 @@ impl AlertDetailViewModel {
             id: alert.id,
             title: alert.title.clone(),
             feed_name,
-            feed_url,
             keyword_pattern,
             severity: alert.effective_severity(),
             base_criticality: alert.criticality,
@@ -123,7 +121,7 @@ impl AlertDetailViewModel {
 // ── Indicators / enrichment ──────────────────────────────────────────────────
 
 /// One enrichment result attached to an indicator.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct EnrichmentViewModel {
     pub provider_id: i64,
     pub status: String,
@@ -135,7 +133,7 @@ pub struct EnrichmentViewModel {
 }
 
 /// An extracted indicator (the "IOCs" tab) with its enrichment results nested.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct IndicatorViewModel {
     pub id: i64,
     pub indicator_type: IndicatorType,
@@ -179,7 +177,7 @@ pub fn indicator_type_label(indicator_type: IndicatorType) -> &'static str {
 // ── Triage history ───────────────────────────────────────────────────────────
 
 /// One triage audit event (the "Triage History" tab).
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct TriageEventViewModel {
     pub id: i64,
     pub event_type: String,
@@ -195,7 +193,7 @@ pub struct TriageEventViewModel {
 /// Everything the split-pane view needs for one selected alert: details plus
 /// the bottom-right context-tab data. Loaded once per selection change by the
 /// app service so rendering never issues SQL.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug)]
 pub struct AlertWorkbenchBundle {
     pub detail: Option<AlertDetailViewModel>,
     pub indicators: Vec<IndicatorViewModel>,

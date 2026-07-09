@@ -507,7 +507,7 @@ pub static ALL_COMMANDS: &[Command] = &[
         aliases: &["enable keyword", "turn on keyword"],
         keywords: &["keyword", "enable", "turn on", "activate"],
         availability: CommandAvailability::WhenKeywordSelected,
-        action: CommandAction::Dispatch(AppAction::KeywordTestSelected),
+        action: CommandAction::Dispatch(AppAction::KeywordEnableSelected),
     },
     Command {
         id: CommandId::KeywordDisableSelected,
@@ -518,7 +518,7 @@ pub static ALL_COMMANDS: &[Command] = &[
         aliases: &["disable keyword", "turn off keyword"],
         keywords: &["keyword", "disable", "turn off", "deactivate"],
         availability: CommandAvailability::WhenKeywordSelected,
-        action: CommandAction::Dispatch(AppAction::KeywordTestSelected),
+        action: CommandAction::Dispatch(AppAction::KeywordDisableSelected),
     },
     Command {
         id: CommandId::DoctorRun,

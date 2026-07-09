@@ -125,31 +125,35 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
     };
     let tab = app.workbench.bottom_tab.label();
 
-    let status: Vec<Span> = if let Some(err) = &app.workbench.last_error {
-        let msg = truncate_for_status(&format!("⚠ {err}"), area.width);
-        vec![Span::styled(
-            format!(" {msg} "),
-            Style::default().fg(app.theme.error),
-        )]
+    let (status_text, status_color) = if let Some(err) = &app.workbench.last_error {
+        (
+            truncate_for_status(&format!("⚠ {err}"), area.width),
+            app.theme.error,
+        )
     } else {
         let n = app.workbench_items.len();
-        let unread = app.workbench_items.iter().filter(|i| !i.read).count();
+        let unread = app.workbench_unread_count;
         let label = if unread > 0 {
             format!(" {n} alerts · {unread} unread ")
         } else {
             format!(" {n} alerts ")
         };
-        vec![Span::styled(label, Style::default().fg(app.theme.muted))]
+        (label, app.theme.muted)
     };
 
-    let hint = format!(
+    let full_hint = format!(
         " [Focus: {focus} | Tab: {tab}]   A/I/E/C/O triage · T disp · N note · M owner · x export · j/k · Tab · [/] · r · ? help "
     );
+    // Truncate the hint so status + hint never overflow the bar on narrow
+    // terminals (char-based; the hint is all single-cell glyphs).
+    let hint_budget = (area.width as usize).saturating_sub(status_text.chars().count());
+    let hint = truncate_to_width(&full_hint, hint_budget);
 
-    let mut line_spans = status;
-    line_spans.push(Span::styled(hint, Style::default().fg(app.theme.muted)));
-
-    let bar = Paragraph::new(Line::from(line_spans)).style(
+    let bar = Paragraph::new(Line::from(vec![
+        Span::styled(status_text, Style::default().fg(status_color)),
+        Span::styled(hint, Style::default().fg(app.theme.muted)),
+    ]))
+    .style(
         Style::default()
             .bg(app.theme.surface)
             .add_modifier(Modifier::BOLD),
@@ -157,15 +161,24 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(bar, area);
 }
 
-/// Truncate a status-bar message so it leaves room for the key hints
-/// (~40% of the bar width). Char-based to stay multibyte-safe.
-fn truncate_for_status(msg: &str, width: u16) -> String {
-    let budget = (width as usize).saturating_mul(4) / 10;
+/// Truncate `msg` to at most `budget` display cells, appending an ellipsis when
+/// it is shortened. Char-based (safe for the single-cell glyphs used here).
+fn truncate_to_width(msg: &str, budget: usize) -> String {
     if msg.chars().count() <= budget {
         return msg.to_string();
     }
+    if budget == 0 {
+        return String::new();
+    }
     let truncated: String = msg.chars().take(budget.saturating_sub(1)).collect();
     format!("{truncated}…")
+}
+
+/// Truncate a status-bar error message so it leaves room for the key hints
+/// (~40% of the bar width).
+fn truncate_for_status(msg: &str, width: u16) -> String {
+    let budget = (width as usize).saturating_mul(4) / 10;
+    truncate_to_width(msg, budget)
 }
 
 /// Half-page scroll increment (matches the shared list motion helper).

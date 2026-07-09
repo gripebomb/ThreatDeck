@@ -163,6 +163,8 @@ pub enum AppAction {
     KeywordAdd,
     KeywordEditSelected,
     KeywordTestSelected,
+    KeywordEnableSelected,
+    KeywordDisableSelected,
     DoctorRun,
     DoctorTor,
     DoctorDatabase,

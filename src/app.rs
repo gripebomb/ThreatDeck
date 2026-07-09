@@ -7,7 +7,7 @@ use crate::auto_fetch::{AutoFetchMessage, AutoFetcher};
 use crate::config::{AppConfig, Paths, TlsTrustStore};
 use crate::db::{
     AlertFilter, Db, EnrichmentJobWithContext, EnrichmentProviderRecord, EnrichmentResultRecord,
-    IndicatorRecord, IndicatorSearch,
+    IndicatorRecord, IndicatorSearch, KeywordUpdate,
 };
 use crate::theme::{get_runtime_theme, Theme};
 use crate::types::*;
@@ -78,14 +78,13 @@ pub fn load_alert_workbench_bundle(db: &Db, alert_id: i64) -> Result<Option<Aler
         .as_ref()
         .map(|f| f.name.clone())
         .unwrap_or_else(|| "(unknown feed)".to_string());
-    let feed_url = feed.as_ref().map(|f| f.url.clone());
     let keyword_pattern = keyword
         .as_ref()
         .map(|k| k.pattern.clone())
         .unwrap_or_else(|| "(unknown keyword)".to_string());
 
     let detail =
-        AlertDetailViewModel::from_parts(&alert, feed_name, feed_url, keyword_pattern, tag_names);
+        AlertDetailViewModel::from_parts(&alert, feed_name, keyword_pattern, tag_names);
 
     // Indicators, each with its latest enrichment results nested. Fetch the
     // enrichment for all indicators in a single batched query (one round trip)
@@ -226,6 +225,10 @@ pub struct App {
     // Alert workbench (split-pane view)
     pub workbench: AlertWorkbenchState,
     pub workbench_items: Vec<AlertListItem>,
+    /// Cached count of unread items in `workbench_items`, recomputed in
+    /// [`refresh_workbench`] so the status bar doesn't iterate the list every
+    /// frame.
+    pub workbench_unread_count: usize,
     pub workbench_bundle: Option<AlertWorkbenchBundle>,
 
     // Articles
@@ -349,6 +352,7 @@ impl App {
             triage_input_target: crate::types::TriageInputTarget::default(),
             workbench: AlertWorkbenchState::new(),
             workbench_items: Vec::new(),
+            workbench_unread_count: 0,
             workbench_bundle: None,
             articles_list: Vec::new(),
             articles_selected: 0,
@@ -405,7 +409,6 @@ impl App {
         };
         app.refresh_dashboard();
         app.refresh_feeds();
-        app.refresh_alerts();
         app.refresh_workbench();
         app.refresh_articles();
         app.refresh_indicators();
@@ -1081,6 +1084,12 @@ impl App {
                     );
                 }
             }
+            AppAction::KeywordEnableSelected => {
+                self.set_keyword_enabled_selected(true);
+            }
+            AppAction::KeywordDisableSelected => {
+                self.set_keyword_enabled_selected(false);
+            }
             AppAction::DoctorRun => {
                 self.set_notification(
                     "Doctor checks not yet implemented".to_string(),
@@ -1123,6 +1132,41 @@ impl App {
                     crate::types::NotificationType::Warning,
                 );
             }
+        }
+    }
+
+    /// Enable or disable the currently selected keyword (palette actions).
+    fn set_keyword_enabled_selected(&mut self, enabled: bool) {
+        let Some(k) = self.keywords_list.get(self.keywords_selected).cloned() else {
+            self.set_notification(
+                "No keyword selected".to_string(),
+                crate::types::NotificationType::Warning,
+            );
+            return;
+        };
+        let update = KeywordUpdate {
+            pattern: None,
+            is_regex: None,
+            case_sensitive: None,
+            criticality: None,
+            enabled: Some(enabled),
+        };
+        match self.db.update_keyword(k.id, &update) {
+            Ok(()) => {
+                self.refresh_keywords();
+                self.set_notification(
+                    format!(
+                        "Keyword '{}' {}",
+                        k.pattern,
+                        if enabled { "enabled" } else { "disabled" }
+                    ),
+                    crate::types::NotificationType::Success,
+                );
+            }
+            Err(e) => self.set_notification(
+                format!("Failed to update keyword: {e}"),
+                crate::types::NotificationType::Error,
+            ),
         }
     }
 
@@ -1378,31 +1422,51 @@ impl App {
     pub fn confirm_action(&mut self) {
         if let Some(dialog) = self.show_confirm.take() {
             match dialog {
-                ConfirmDialog::DeleteFeed { id, .. } => {
-                    let _ = self.db.delete_feed(id);
-                    self.refresh_feeds();
-                    self.set_notification("Feed deleted".into(), NotificationType::Success);
-                }
-                ConfirmDialog::DeleteKeyword { id, .. } => {
-                    let _ = self.db.delete_keyword(id);
-                    self.refresh_keywords();
-                    self.refresh_alerts();
-                    self.refresh_workbench();
-                    self.set_notification("Keyword deleted".into(), NotificationType::Success);
-                }
-                ConfirmDialog::DeleteTag { id, .. } => {
-                    let _ = self.db.delete_tag(id);
-                    self.refresh_tags();
-                    self.set_notification("Tag deleted".into(), NotificationType::Success);
-                }
-                ConfirmDialog::DeleteAlert { id } => {
-                    let _ = self.db.delete_alert(id);
-                    self.refresh_alerts();
-                    self.refresh_workbench();
-                    self.refresh_indicators();
-                    self.refresh_dashboard();
-                    self.set_notification("Alert deleted".into(), NotificationType::Success);
-                }
+                ConfirmDialog::DeleteFeed { id, .. } => match self.db.delete_feed(id) {
+                    Ok(()) => {
+                        self.refresh_feeds();
+                        self.set_notification("Feed deleted".into(), NotificationType::Success);
+                    }
+                    Err(e) => self.set_notification(
+                        format!("Failed to delete feed: {e}"),
+                        NotificationType::Error,
+                    ),
+                },
+                ConfirmDialog::DeleteKeyword { id, .. } => match self.db.delete_keyword(id) {
+                    Ok(()) => {
+                        self.refresh_keywords();
+                        self.refresh_alerts();
+                        self.refresh_workbench();
+                        self.set_notification("Keyword deleted".into(), NotificationType::Success);
+                    }
+                    Err(e) => self.set_notification(
+                        format!("Failed to delete keyword: {e}"),
+                        NotificationType::Error,
+                    ),
+                },
+                ConfirmDialog::DeleteTag { id, .. } => match self.db.delete_tag(id) {
+                    Ok(()) => {
+                        self.refresh_tags();
+                        self.set_notification("Tag deleted".into(), NotificationType::Success);
+                    }
+                    Err(e) => self.set_notification(
+                        format!("Failed to delete tag: {e}"),
+                        NotificationType::Error,
+                    ),
+                },
+                ConfirmDialog::DeleteAlert { id } => match self.db.delete_alert(id) {
+                    Ok(()) => {
+                        self.refresh_alerts();
+                        self.refresh_workbench();
+                        self.refresh_indicators();
+                        self.refresh_dashboard();
+                        self.set_notification("Alert deleted".into(), NotificationType::Success);
+                    }
+                    Err(e) => self.set_notification(
+                        format!("Failed to delete alert: {e}"),
+                        NotificationType::Error,
+                    ),
+                },
                 ConfirmDialog::DeleteOldAlerts { cutoff, .. } => {
                     match self.db.delete_old_alerts(cutoff) {
                         Ok(count) => {
@@ -1420,11 +1484,16 @@ impl App {
                         }
                     }
                 }
-                ConfirmDialog::DeleteNotification { id, .. } => {
-                    let _ = self.db.delete_notification(id);
-                    self.refresh_settings();
-                    self.set_notification("Notification deleted".into(), NotificationType::Success);
-                }
+                ConfirmDialog::DeleteNotification { id, .. } => match self.db.delete_notification(id) {
+                    Ok(()) => {
+                        self.refresh_settings();
+                        self.set_notification("Notification deleted".into(), NotificationType::Success);
+                    }
+                    Err(e) => self.set_notification(
+                        format!("Failed to delete notification: {e}"),
+                        NotificationType::Error,
+                    ),
+                },
                 ConfirmDialog::BulkDeleteAlerts { .. } => {
                     let ids: Vec<i64> = self.alerts_selected_bulk.iter().copied().collect();
                     match self.db.delete_alerts_by_ids(&ids) {
@@ -1582,6 +1651,7 @@ impl App {
             Ok(items) => {
                 self.workbench
                     .restore_selection_by_id(items.len(), |i| items.get(i).map(|x| x.id));
+                self.workbench_unread_count = items.iter().filter(|i| !i.read).count();
                 self.workbench_items = items;
             }
             Err(e) => self
@@ -2040,10 +2110,6 @@ mod workbench_tests {
         assert_eq!(detail.title.as_deref(), Some("Ransomware alert"));
         assert_eq!(detail.severity, Criticality::High);
         assert_eq!(detail.feed_name, "IOC Feed");
-        assert_eq!(
-            detail.feed_url.as_deref(),
-            Some("https://ioc.example.test/feed.xml")
-        );
         assert_eq!(detail.keyword_pattern, "ransomware");
         assert_eq!(detail.status, crate::types::AlertStatus::New);
         assert_eq!(

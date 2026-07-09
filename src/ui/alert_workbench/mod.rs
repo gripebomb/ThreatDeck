@@ -1,32 +1,31 @@
-//! Split-pane alert workbench foundation.
+//! Split-pane alert workbench: the live `Screen::Alerts` view.
 //!
-//! Phase 1 delivers non-visual building blocks only:
-//! - [`state`] — pane focus, context tabs, selection, scroll, filters, loading.
+//! This module groups everything behind the three-pane alert workbench:
+//! - [`state`] — pane focus, context tabs, selection, scroll, filters.
 //! - [`view_models`] — TUI view models and the selected-alert data bundle.
-//! - [`layout`] — wide/narrow/tiny terminal layout engine.
+//! - [`layout`] — wide/narrow/tiny terminal layout engine (internal).
+//! - [`alert_list`] / [`alert_details`] / [`context_tabs`] — pane renderers.
+//! - [`page`] — assembles the panes and wires keyboard navigation.
+//! - [`triage`] — analyst triage/export actions.
 //!
-//! Rendering, event wiring, and analyst actions land in later phases. See
-//! `docs/MASTER_PLAN.md` (Phase 1) and `docs/ARCHITECTURE.md`.
+//! See `docs/MASTER_PLAN.md` and `docs/ARCHITECTURE.md`.
 
-// Phase 1 ships non-visual foundation; the re-exported items below are wired
-// into rendering in Phase 2+. Suppress the interim unused-import noise locally
-// (mirrors the crate-level `#![allow(dead_code)]` stance).
-#![allow(unused_imports)]
+mod layout;
 
 pub mod alert_details;
 pub mod alert_list;
 pub mod context_tabs;
-pub mod layout;
 pub mod page;
 pub mod state;
 pub mod triage;
 pub mod view_models;
 
-pub use layout::{classify, compute_layout, compute_layout_from_size, LayoutMode, WorkbenchLayout};
-pub use state::{
-    clamp_scroll, AlertContextTab, AlertFilterState, AlertPane, AlertSortMode, AlertWorkbenchState,
-};
+// Re-export only the items consumed outside this module via the
+// `alert_workbench::<name>` path. Submodule types that are only used internally
+// (e.g. `layout::classify`, `state::clamp_scroll`) stay module-private.
+pub use layout::{compute_layout, LayoutMode};
+pub use state::{AlertContextTab, AlertFilterState, AlertPane, AlertWorkbenchState};
 pub use view_models::{
-    AlertDetailViewModel, AlertListItem, AlertWorkbenchBundle, EnrichmentViewModel,
-    IndicatorViewModel, TriageEventViewModel,
+    AlertDetailViewModel, AlertListItem, AlertWorkbenchBundle, IndicatorViewModel,
+    TriageEventViewModel,
 };

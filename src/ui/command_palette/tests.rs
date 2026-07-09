@@ -1,7 +1,10 @@
 use crate::types::Screen;
 use crate::ui::command_palette::command::CommandAvailability;
 use crate::ui::command_palette::registry::CommandContext;
-use crate::ui::command_palette::{matcher, registry, CommandId, CommandPaletteState, PaletteMode};
+use crate::ui::command_palette::{
+    matcher, registry, AppAction, CommandAction, CommandId, CommandPaletteState, ModalKind,
+    PaletteMode,
+};
 use std::collections::HashSet;
 
 /// A context sitting on the Alerts workbench with an alert selected, so the
@@ -353,4 +356,84 @@ fn selection_valid_after_filtering() {
     state.input_char('z');
     state.input_char('z');
     assert_eq!(state.selected_index, 0);
+}
+
+// ── Command-id → action mapping ─────────────────────────────────────────────
+//
+// Guards against wiring drift: each CommandId must dispatch the action its
+// name implies, so picking a command in the palette does what it advertises.
+
+fn command_by_id(id: CommandId) -> &'static crate::ui::command_palette::command::Command {
+    registry::ALL_COMMANDS
+        .iter()
+        .find(|c| c.id == id)
+        .unwrap_or_else(|| panic!("no command for id {id:?}"))
+}
+
+#[test]
+fn navigation_commands_map_to_navigate_action() {
+    assert_eq!(
+        command_by_id(CommandId::OpenDashboard).action,
+        CommandAction::Navigate(Screen::Dashboard)
+    );
+    assert_eq!(
+        command_by_id(CommandId::OpenAlerts).action,
+        CommandAction::Navigate(Screen::Alerts)
+    );
+    assert_eq!(
+        command_by_id(CommandId::FeedHealth).action,
+        CommandAction::Navigate(Screen::Logs)
+    );
+}
+
+#[test]
+fn system_commands_map_to_expected_actions() {
+    assert_eq!(command_by_id(CommandId::Quit).action, CommandAction::Quit);
+    assert_eq!(
+        command_by_id(CommandId::Refresh).action,
+        CommandAction::Dispatch(AppAction::Refresh)
+    );
+    assert_eq!(
+        command_by_id(CommandId::OpenHelp).action,
+        CommandAction::OpenModal(ModalKind::Help)
+    );
+}
+
+#[test]
+fn workbench_triage_commands_map_to_dispatch_actions() {
+    // Each triage id must dispatch its matching AppAction (not a sibling's).
+    assert_eq!(
+        command_by_id(CommandId::AlertAcknowledge).action,
+        CommandAction::Dispatch(AppAction::AlertAcknowledge)
+    );
+    assert_eq!(
+        command_by_id(CommandId::AlertReopen).action,
+        CommandAction::Dispatch(AppAction::AlertReopen)
+    );
+    assert_eq!(
+        command_by_id(CommandId::AlertFocusList).action,
+        CommandAction::Dispatch(AppAction::AlertFocusList)
+    );
+    assert_eq!(
+        command_by_id(CommandId::AlertTabIndicators).action,
+        CommandAction::Dispatch(AppAction::AlertTabIndicators)
+    );
+}
+
+#[test]
+fn keyword_enable_disable_map_to_distinct_actions() {
+    // Regression: these previously all dispatched KeywordTestSelected via
+    // copy-paste. They now dispatch their own (distinct) actions.
+    assert_eq!(
+        command_by_id(CommandId::KeywordEnableSelected).action,
+        CommandAction::Dispatch(AppAction::KeywordEnableSelected)
+    );
+    assert_eq!(
+        command_by_id(CommandId::KeywordDisableSelected).action,
+        CommandAction::Dispatch(AppAction::KeywordDisableSelected)
+    );
+    assert_eq!(
+        command_by_id(CommandId::KeywordTestSelected).action,
+        CommandAction::Dispatch(AppAction::KeywordTestSelected)
+    );
 }

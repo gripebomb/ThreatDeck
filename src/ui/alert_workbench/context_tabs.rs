@@ -12,7 +12,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Tabs},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Tabs, Wrap},
     Frame,
 };
 
@@ -24,9 +24,9 @@ use crate::ui::alert_workbench::{
 
 /// Render the bottom-right context panel into `area`.
 ///
-/// Precedence: loading indicator > no-selection empty state > tabbed content.
-/// The active tab follows `state.bottom_tab`; scroll follows
-/// `state.bottom_detail_scroll`; the focused border follows `focused_pane`.
+/// Precedence: error > no-selection empty state > tabbed content. The active
+/// tab follows `state.bottom_tab`; scroll follows `state.bottom_detail_scroll`;
+/// the focused border follows `focused_pane`.
 pub fn draw_context_panel(
     f: &mut Frame,
     area: Rect,
@@ -48,15 +48,10 @@ pub fn draw_context_panel(
                 .add_modifier(Modifier::BOLD),
         );
 
-    // Precedence: error > loading > no-selection > tabbed content.
+    // Precedence: error > no-selection > tabbed content.
     if let Some(err) = &state.last_error {
         let msg = format!("⚠ Couldn't load this alert's context:\n\n{err}");
         render_block_message(f, area, block, &msg, theme.error);
-        return;
-    }
-
-    if state.is_loading_details {
-        render_block_message(f, area, block, "Loading context…", theme.muted);
         return;
     }
 
@@ -101,10 +96,13 @@ pub fn draw_context_panel(
         ),
         AlertContextTab::RawContent => match bundle.raw_content.as_deref() {
             Some(raw) if !raw.trim().is_empty() => {
+                // Clamp scroll so the view can't run past the content.
+                let content_lines = raw.lines().count() as u16;
+                let max_scroll = content_lines.saturating_sub(body.height);
                 let p = Paragraph::new(raw)
                     .style(Style::default().fg(theme.fg))
-                    .wrap(ratatui::widgets::Wrap { trim: false })
-                    .scroll((scroll, 0));
+                    .wrap(Wrap { trim: false })
+                    .scroll((scroll.min(max_scroll), 0));
                 f.render_widget(p, body);
             }
             _ => render_centered(
@@ -213,6 +211,7 @@ fn draw_metadata_tab(
     let max_scroll = content_lines.saturating_sub(area.height);
     let paragraph = Paragraph::new(pretty)
         .style(Style::default().fg(theme.fg))
+        .wrap(Wrap { trim: false })
         .scroll((scroll.min(max_scroll), 0));
     f.render_widget(paragraph, area);
 }
@@ -308,7 +307,7 @@ mod tests {
             confidence: Some(80),
             risk: Some(50),
             enrichment: reputation
-                .map(|r| crate::ui::alert_workbench::EnrichmentViewModel {
+                .map(|r| crate::ui::alert_workbench::view_models::EnrichmentViewModel {
                     provider_id: 1,
                     status: "succeeded".into(),
                     reputation: Some(r.into()),
@@ -613,18 +612,6 @@ mod tests {
         assert!(
             text.contains("No alert selected"),
             "no-selection state missing:\n{text}"
-        );
-    }
-
-    #[test]
-    fn shows_loading_state() {
-        let mut state = state_on_tab(AlertContextTab::Indicators);
-        state.is_loading_details = true;
-        let bundle = bundle_with(vec![], None, vec![]);
-        let text = render_text(Some(&bundle), &state, 80, 16);
-        assert!(
-            text.contains("Loading context"),
-            "loading state missing:\n{text}"
         );
     }
 

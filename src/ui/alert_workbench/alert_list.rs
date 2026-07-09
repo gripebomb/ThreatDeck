@@ -11,7 +11,7 @@ use chrono::{DateTime, Utc};
 use ratatui::{
     layout::{Alignment, Constraint, Rect},
     style::{Modifier, Style},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap},
     Frame,
 };
 
@@ -69,6 +69,7 @@ pub fn draw_alert_list(
         let empty = Paragraph::new(msg)
             .style(Style::default().fg(color))
             .alignment(Alignment::Center)
+            .wrap(Wrap { trim: true })
             .block(block);
         f.render_widget(empty, area);
         return;
@@ -77,9 +78,12 @@ pub fn draw_alert_list(
     // Compact layout drops the Feed column when the pane is narrow so the title
     // and triage cues stay readable.
     let compact = area.width < COMPACT_WIDTH_THRESHOLD;
+    // Sample the clock once per draw and thread it through `relative_time`
+    // (which is otherwise pure) so the age stays deterministic/testable.
+    let now = Utc::now();
     let rows = items
         .iter()
-        .map(|item| build_row(item, compact, theme))
+        .map(|item| build_row(item, compact, theme, now))
         .collect::<Vec<_>>();
     let header = build_header(compact, theme);
 
@@ -136,7 +140,7 @@ fn column_constraints(compact: bool) -> Vec<Constraint> {
     }
 }
 
-fn build_row(item: &AlertListItem, compact: bool, theme: &Theme) -> Row<'static> {
+fn build_row(item: &AlertListItem, compact: bool, theme: &Theme, now: DateTime<Utc>) -> Row<'static> {
     // Unread marker (text glyph, not colour-only).
     let read_mark = if item.read { "○" } else { "●" };
     let read_style = if item.read {
@@ -156,7 +160,7 @@ fn build_row(item: &AlertListItem, compact: bool, theme: &Theme) -> Row<'static>
         .title
         .clone()
         .unwrap_or_else(|| "(untitled)".to_string());
-    let detected = relative_time(item.detected_at);
+    let detected = relative_time(item.detected_at, now);
 
     let mut cells: Vec<Cell<'static>> = vec![
         Cell::from(read_mark).style(read_style),
@@ -182,10 +186,11 @@ fn severity_short(criticality: Criticality) -> &'static str {
     }
 }
 
-/// Compact relative age for the "When" column. Deterministic only up to the
-/// age bucket; render tests assert on labels/structure rather than exact times.
-fn relative_time(dt: DateTime<Utc>) -> String {
-    let secs = Utc::now().signed_duration_since(dt).num_seconds().max(0);
+/// Compact relative age for the "When" column, computed against `now`
+/// (sampled once per draw and passed in) rather than reading the clock itself,
+/// so the helper is pure and testable. Deterministic up to the age bucket.
+fn relative_time(dt: DateTime<Utc>, now: DateTime<Utc>) -> String {
+    let secs = now.signed_duration_since(dt).num_seconds().max(0);
     if secs < 60 {
         "now".to_string()
     } else if secs < 3600 {

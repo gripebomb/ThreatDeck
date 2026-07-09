@@ -18,9 +18,6 @@ use crate::ui::alert_workbench::state::AlertPane;
 pub const WIDE_MIN_WIDTH: u16 = 110;
 pub const WIDE_MIN_HEIGHT: u16 = 30;
 
-/// Below this width the layout collapses to single-pane mode.
-pub const NARROW_MAX_WIDTH: u16 = 99;
-
 /// Below either of these the terminal is too small to be useful; the layout
 /// returns a single safe rect and never panics.
 pub const TINY_MIN_WIDTH: u16 = 20;
@@ -103,9 +100,10 @@ pub fn compute_layout_from_size(width: u16, height: u16, focused: AlertPane) -> 
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
 fn wide_layout(area: Rect) -> WorkbenchLayout {
-    // Left pane = 35% of width; right column = the remainder.
+    // Left pane = 35% of width; right column = the remainder. Clamp left_w to
+    // the available width so a future pct change (>100%) can't overflow.
     let left_w = ((area.width as u32 * LEFT_WIDTH_PCT) / 100) as u16;
-    let left_w = left_w.max(1);
+    let left_w = left_w.max(1).min(area.width);
     let right_w = area.width.saturating_sub(left_w);
 
     let left = safe_rect(area.x, area.y, left_w, area.height);

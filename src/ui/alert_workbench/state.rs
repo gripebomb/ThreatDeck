@@ -183,8 +183,6 @@ pub struct AlertWorkbenchState {
     pub bottom_tab: AlertContextTab,
     pub alert_filter: AlertFilterState,
     pub alert_sort: AlertSortMode,
-    /// True while a selected-alert bundle is being fetched.
-    pub is_loading_details: bool,
     /// Last error loading the selected-alert bundle, if any.
     pub last_error: Option<String>,
 }
@@ -344,10 +342,6 @@ impl AlertWorkbenchState {
 
     // ── Loading / error ──────────────────────────────────────────────────────
 
-    pub fn set_loading_details(&mut self, loading: bool) {
-        self.is_loading_details = loading;
-    }
-
     pub fn set_error(&mut self, message: Option<String>) {
         self.last_error = message;
     }
@@ -371,7 +365,6 @@ mod tests {
         assert!(s.selected_alert_id.is_none());
         assert_eq!(s.selected_alert_index, 0);
         assert!(s.last_error.is_none());
-        assert!(!s.is_loading_details);
     }
 
     // ── Pane focus cycling ───────────────────────────────────────────────────
