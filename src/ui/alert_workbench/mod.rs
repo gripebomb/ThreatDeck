@@ -19,6 +19,7 @@ pub mod context_tabs;
 pub mod layout;
 pub mod page;
 pub mod state;
+pub mod triage;
 pub mod view_models;
 
 pub use layout::{classify, compute_layout, compute_layout_from_size, LayoutMode, WorkbenchLayout};

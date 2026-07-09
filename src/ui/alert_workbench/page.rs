@@ -11,6 +11,8 @@
 //!
 //! See `docs/MASTER_PLAN.md` (Phase 2) and `docs/ARCHITECTURE.md`.
 
+use crate::types::TriageEnumTarget;
+use crate::types::TriageInputTarget;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     layout::Rect,
@@ -25,6 +27,7 @@ use crate::ui::alert_workbench::alert_details::draw_alert_details;
 use crate::ui::alert_workbench::alert_list::draw_alert_list;
 use crate::ui::alert_workbench::context_tabs::draw_context_panel;
 use crate::ui::alert_workbench::state::AlertPane;
+use crate::ui::alert_workbench::triage;
 use crate::ui::alert_workbench::{compute_layout, LayoutMode};
 use crate::ui::list::{motion_from_key, move_selection};
 
@@ -107,6 +110,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 
     draw_status_bar(f, status_area, app);
+
+    // Triage input popups (enum selector / note entry) overlay the workbench.
+    triage::draw_overlays(f, app);
 }
 
 /// One-line status + key-hint bar. Shows a load error (red) when present,
@@ -137,7 +143,7 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
     };
 
     let hint = format!(
-        "j/k move · Tab focus · [/] tabs · J/K or Ctrl-d/u scroll · r refresh · / filter · ? help · q quit   [Focus: {focus} | Tab: {tab}] "
+        " [Focus: {focus} | Tab: {tab}]   A/I/E/C/O triage · T disp · N note · M owner · x export · j/k · Tab · [/] · r · ? help "
     );
 
     let mut line_spans = status;
@@ -178,6 +184,11 @@ const SCROLL_HALF: i32 = 10;
 /// bound — `1`/`2`/`3` are the app's global screen-switch hotkeys. Focus is
 /// handled by `Tab`/`Shift+Tab`.
 pub fn handle_key(app: &mut App, key: KeyEvent) {
+    // 0) Triage input modes (enum selector / note entry) take over all keys.
+    if triage::handle_input_modes(app, key) {
+        return;
+    }
+
     let len = app.workbench_items.len();
 
     // 1) Pane-local scrolling when a scrollable pane (details/context) is focused.
@@ -197,13 +208,28 @@ pub fn handle_key(app: &mut App, key: KeyEvent) {
         return;
     }
 
-    // 3) Pane focus, context tabs, refresh.
+    // 3) Pane focus, context tabs, refresh, and triage/export actions (T09).
     match key.code {
         KeyCode::Tab => app.workbench.focus_next_pane(),
         KeyCode::BackTab => app.workbench.focus_prev_pane(),
         KeyCode::Char(']') => app.workbench.cycle_tab_forward(),
         KeyCode::Char('[') => app.workbench.cycle_tab_backward(),
         KeyCode::Char('r') => app.refresh_workbench(),
+        // Triage: status
+        KeyCode::Char('A') => triage::acknowledge(app),
+        KeyCode::Char('I') => triage::investigate(app),
+        KeyCode::Char('E') => triage::escalate(app),
+        KeyCode::Char('C') => triage::close(app),
+        KeyCode::Char('O') => triage::reopen(app),
+        // Triage: enum selectors
+        KeyCode::Char('s') => triage::start_enum_select(app, TriageEnumTarget::Status),
+        KeyCode::Char('T') => triage::start_enum_select(app, TriageEnumTarget::Disposition),
+        KeyCode::Char('S') => triage::start_enum_select(app, TriageEnumTarget::Severity),
+        // Triage: free-text entry
+        KeyCode::Char('N') => triage::start_note_input(app, TriageInputTarget::Note),
+        KeyCode::Char('M') => triage::start_note_input(app, TriageInputTarget::Owner),
+        // Export selected alert to Markdown
+        KeyCode::Char('x') => triage::export_selected(app),
         _ => {}
     }
 }
@@ -237,9 +263,12 @@ fn scroll_focused(app: &mut App, delta: i32) {
 mod tests {
     //! Smoke tests for the assembled workbench page.
     use super::*;
+    use crate::app::InputMode;
     use crate::config::{AppConfig, Paths};
     use crate::db::{AlertCreate, Db, FeedCreate, KeywordCreate};
-    use crate::types::{Criticality, FeedType, Screen};
+    use crate::types::{
+        AlertDisposition, AlertStatus, Criticality, FeedType, NotificationType, Screen,
+    };
     use crossterm::event::KeyModifiers;
     use ratatui::{backend::TestBackend, Terminal};
     use std::path::PathBuf;
@@ -359,7 +388,65 @@ mod tests {
         );
         assert!(text.contains("Context:"), "context pane missing:\n{text}");
         // Status bar hints render.
-        assert!(text.contains("j/k move"), "status bar missing:\n{text}");
+        assert!(text.contains("A/I/E/C/O"), "status bar missing:\n{text}");
+        drop(app);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn triage_acknowledge_key_routes_through_handler() {
+        let (mut app, path) = build_app("triagekey", 2);
+        let id = app.workbench.selected_alert_id;
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('A'), KeyModifiers::NONE),
+        );
+        assert_eq!(
+            app.workbench_bundle
+                .as_ref()
+                .and_then(|b| b.detail.as_ref())
+                .unwrap()
+                .status,
+            AlertStatus::Acknowledged,
+            "A key should acknowledge the selected alert"
+        );
+        assert_eq!(
+            app.notification.as_ref().unwrap().1,
+            NotificationType::Success
+        );
+        // Selection survives the refresh.
+        assert_eq!(app.workbench.selected_alert_id, id);
+        drop(app);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn triage_disposition_selector_via_keys() {
+        let (mut app, path) = build_app("dispkey", 1);
+        // `T` opens the disposition selector under Typing mode.
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('T'), KeyModifiers::NONE),
+        );
+        assert!(app.triage_enum_select_mode, "T should open the selector");
+        assert_eq!(app.input_mode, InputMode::Typing);
+        // `2` picks ConfirmedThreat.
+        handle_key(
+            &mut app,
+            KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE),
+        );
+        assert!(
+            !app.triage_enum_select_mode,
+            "selector should close after pick"
+        );
+        assert_eq!(
+            app.workbench_bundle
+                .as_ref()
+                .and_then(|b| b.detail.as_ref())
+                .unwrap()
+                .disposition,
+            AlertDisposition::ConfirmedThreat
+        );
         drop(app);
         let _ = std::fs::remove_file(path);
     }

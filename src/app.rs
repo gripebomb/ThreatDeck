@@ -555,6 +555,13 @@ impl App {
         if self.input_mode == InputMode::Typing {
             if key.code == KeyCode::Esc {
                 self.input_mode = InputMode::Normal;
+                // Cancel any in-flight triage input (note/owner entry or enum
+                // selector) so Esc cleanly exits it (Ticket 09).
+                self.triage_note_input_mode = false;
+                self.triage_note_input.clear();
+                self.triage_enum_select_mode = false;
+                self.triage_enum_target = None;
+                self.triage_enum_selected = 0;
                 return;
             }
             self.handle_screen_key(key);
