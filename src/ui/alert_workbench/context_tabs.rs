@@ -36,7 +36,8 @@ pub fn draw_context_panel(
 ) {
     let focused = state.focused_pane == AlertPane::ContextPanel;
     let border_color = if focused { theme.primary } else { theme.border };
-    let title = format!(" Context: {} ", state.bottom_tab.label());
+    let focus = if focused { "◆ " } else { "" };
+    let title = format!(" {}Context: {} ", focus, state.bottom_tab.label());
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color))

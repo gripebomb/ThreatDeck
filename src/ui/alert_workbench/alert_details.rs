@@ -38,7 +38,11 @@ pub fn draw_alert_details(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color))
-        .title(" Alert Details ")
+        .title(if focused {
+            " ◆ Alert Details "
+        } else {
+            " Alert Details "
+        })
         .title_style(
             Style::default()
                 .fg(theme.primary)

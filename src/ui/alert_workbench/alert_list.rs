@@ -40,7 +40,8 @@ pub fn draw_alert_list(
     } else {
         " (filtered)".to_string()
     };
-    let title = format!(" Alerts ({}){} ", items.len(), filter_tag);
+    let focus = if focused { "◆ " } else { "" };
+    let title = format!(" {}Alerts ({}){} ", focus, items.len(), filter_tag);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color))

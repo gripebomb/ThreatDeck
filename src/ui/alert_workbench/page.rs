@@ -648,4 +648,78 @@ mod tests {
         drop(app);
         let _ = std::fs::remove_file(path);
     }
+
+    #[test]
+    fn renders_safely_across_terminal_sizes() {
+        // Simulates odd / SSH terminal sizes: the assembled page must never
+        // panic (defense-in-depth; the global draw guards <80x24 anyway).
+        let (mut app, path) = build_app("sizes", 4);
+        for &(w, h) in &[
+            (1, 1),
+            (2, 2),
+            (10, 5),
+            (20, 8),
+            (79, 23),
+            (80, 24),
+            (109, 29),
+            (110, 30),
+            (120, 34),
+            (200, 60),
+        ] {
+            let _ = render_text(&mut app, w, h);
+        }
+        drop(app);
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// Render via the top-level `ui::draw` (includes the help overlay).
+    fn render_full(app: &mut App, w: u16, h: u16) -> String {
+        let backend = TestBackend::new(w, h);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| crate::ui::draw(f, app)).unwrap();
+        let buf = terminal.backend().buffer();
+        (0..h)
+            .map(|y| {
+                (0..w)
+                    .map(|x| buf[(x, y)].symbol().chars().next().unwrap_or(' '))
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn help_overlay_documents_workbench_keys() {
+        let (mut app, path) = build_app("help", 2);
+        app.show_help = true;
+        let text = render_full(&mut app, 120, 40);
+        assert!(
+            text.contains("Alerts Workbench"),
+            "help overlay missing workbench section:\n{text}"
+        );
+        assert!(
+            text.contains("A I E C O"),
+            "triage keys missing from help:\n{text}"
+        );
+        assert!(
+            text.contains("Export Markdown"),
+            "export missing from help:\n{text}"
+        );
+        drop(app);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn focused_pane_title_carries_focus_marker() {
+        // Accessibility: focus is conveyed by a glyph, not colour alone.
+        let (mut app, path) = build_app("marker", 2);
+        // Default focus is the list pane.
+        let text = render_text(&mut app, 120, 34);
+        assert!(
+            text.contains('◆'),
+            "focused (list) pane should carry the focus marker:\n{text}"
+        );
+        drop(app);
+        let _ = std::fs::remove_file(path);
+    }
 }

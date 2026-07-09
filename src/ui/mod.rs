@@ -92,10 +92,10 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     if app.show_help {
         let area = f.area();
         let help_area = ratatui::layout::Rect {
-            x: area.width / 4,
-            y: area.height / 4,
-            width: area.width / 2,
-            height: area.height / 2,
+            x: area.width / 8,
+            y: area.height / 8,
+            width: area.width * 3 / 4,
+            height: area.height * 3 / 4,
         };
         let block = ratatui::widgets::Block::default()
             .title("Help - Press ? or Esc to close")
@@ -103,28 +103,40 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             .border_style(ratatui::style::Style::default().fg(app.theme.primary));
         let text = ratatui::text::Text::from(vec![
             ratatui::text::Line::from("Global Keys:"),
-            ratatui::text::Line::from("  1-9,0      Switch screens (Dashboard, Feeds, Alerts, Articles, Indicators, Enrichment, Keywords, Tags, Logs, Settings)"),
-            ratatui::text::Line::from("  q          Quit"),
-            ratatui::text::Line::from("  /          Filter current list"),
-            ratatui::text::Line::from("  gg / G     Jump to top / bottom"),
-            ratatui::text::Line::from("  Ctrl+d/u   Half-page down / up"),
-            ratatui::text::Line::from("  ? / F1     Toggle help"),
-            ratatui::text::Line::from("  Esc        Cancel / Go back"),
+            ratatui::text::Line::from(
+                "  1-9,0   Switch screens     q   Quit      ?/F1  Help      Esc  Back/Cancel",
+            ),
+            ratatui::text::Line::from(
+                "  /        Filter list        :   Cmd palette   Ctrl+P  Fuzzy palette",
+            ),
+            ratatui::text::Line::from(
+                "  gg / G   Top / bottom       Ctrl+d/u  Half-page     Tab  Next field",
+            ),
             ratatui::text::Line::from(""),
-            ratatui::text::Line::from("Form Input Mode:"),
-            ratatui::text::Line::from("  i / Enter  Start typing in the focused field"),
-            ratatui::text::Line::from("  Tab        Move to next field (Normal mode)"),
-            ratatui::text::Line::from("  Space      Toggle boolean fields"),
-            ratatui::text::Line::from("  <- ->      Cycle enum fields"),
-            ratatui::text::Line::from("  Esc        Exit Typing mode / Cancel form"),
+            ratatui::text::Line::from("Form fields:"),
+            ratatui::text::Line::from(
+                "  i/Enter  Start typing   Space  Toggle   <- ->  Cycle enum   Esc  Cancel",
+            ),
             ratatui::text::Line::from(""),
-            ratatui::text::Line::from("When in Typing mode:"),
-            ratatui::text::Line::from("  Type text  Enter characters into the focused field"),
-            ratatui::text::Line::from("  Backspace  Delete last character"),
-            ratatui::text::Line::from("  Enter      Submit the form"),
-            ratatui::text::Line::from("  Esc        Exit Typing mode (return to Normal mode)"),
+            ratatui::text::Line::from("Alerts Workbench (screen 3):"),
+            ratatui::text::Line::from(
+                "  j/k arrows   Move selection       Tab / Shift+Tab  Cycle pane focus",
+            ),
+            ratatui::text::Line::from(
+                "  gg / G       Top / bottom         [ / ]            Cycle context tab",
+            ),
+            ratatui::text::Line::from(
+                "  J/K Ctrl-d/u Scroll details/ctx   r                Refresh",
+            ),
+            ratatui::text::Line::from(
+                "  A I E C O    Acknowledge / Investigate / Escalate / Close / Reopen",
+            ),
+            ratatui::text::Line::from("  s T S        Status / Disposition / Severity picker"),
+            ratatui::text::Line::from(
+                "  N M          Add note / Set owner   x               Export Markdown",
+            ),
             ratatui::text::Line::from(""),
-            ratatui::text::Line::from("Screen-specific keys shown in status bar."),
+            ratatui::text::Line::from("Screen-specific keys are also shown in the status bar."),
         ]);
         let paragraph = ratatui::widgets::Paragraph::new(text)
             .style(
