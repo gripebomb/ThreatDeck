@@ -606,6 +606,7 @@ pub enum NotificationType {
     Error,
 }
 
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone)]
 pub enum ConfirmDialog {
     DeleteFeed { id: i64, name: String },
@@ -614,7 +615,6 @@ pub enum ConfirmDialog {
     DeleteAlert { id: i64 },
     DeleteOldAlerts { cutoff: DateTime<Utc>, count: u64 },
     DeleteNotification { id: i64, name: String },
-    BulkDeleteAlerts { count: usize },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

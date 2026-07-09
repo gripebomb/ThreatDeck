@@ -1,5 +1,4 @@
 pub mod alert_workbench;
-pub mod alerts;
 pub mod articles;
 pub mod command_palette;
 pub mod dashboard;
@@ -175,9 +174,6 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             }
             crate::types::ConfirmDialog::DeleteNotification { name, .. } => {
                 format!("Delete notification '{}' ?", name)
-            }
-            crate::types::ConfirmDialog::BulkDeleteAlerts { count } => {
-                format!("Delete {} selected alerts?", count)
             }
         };
         let block = ratatui::widgets::Block::default()

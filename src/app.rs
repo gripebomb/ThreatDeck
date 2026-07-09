@@ -1,6 +1,6 @@
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::time::Instant;
 
 use crate::auto_fetch::{AutoFetchMessage, AutoFetcher};
@@ -202,17 +202,12 @@ pub struct App {
     pub feeds_selected_attempts: Vec<crate::feed::diagnostics::FetchAttempt>,
 
     // Alerts
-    pub alerts_list: Vec<AlertWithMeta>,
-    pub alerts_selected: usize,
     pub alerts_filter: String,
     pub alerts_filter_criticality: Option<Criticality>,
     pub alerts_filter_unread_only: bool,
     pub alerts_filter_status: Option<AlertStatus>,
     pub alerts_filter_disposition: Option<AlertDisposition>,
     pub alerts_hide_closed: bool,
-    pub alerts_detail_view: bool,
-    pub alerts_bulk_mode: bool,
-    pub alerts_selected_bulk: HashSet<i64>,
     pub triage_history_view: bool,
     pub triage_enum_select_mode: bool,
     pub triage_enum_target: Option<TriageEnumTarget>,
@@ -331,17 +326,12 @@ impl App {
             feeds_detail_view: false,
             feeds_sort: 0,
             feeds_selected_attempts: Vec::new(),
-            alerts_list: Vec::new(),
-            alerts_selected: 0,
             alerts_filter: String::new(),
             alerts_filter_criticality: None,
             alerts_filter_unread_only: false,
             alerts_filter_status: None,
             alerts_filter_disposition: None,
             alerts_hide_closed: true,
-            alerts_detail_view: false,
-            alerts_bulk_mode: false,
-            alerts_selected_bulk: HashSet::new(),
             triage_history_view: false,
             triage_enum_select_mode: false,
             triage_enum_target: None,
@@ -459,7 +449,6 @@ impl App {
                         errors,
                     } => {
                         self.refresh_dashboard();
-                        self.refresh_alerts();
                         self.refresh_workbench();
                         self.refresh_articles();
                         self.refresh_indicators();
@@ -963,7 +952,7 @@ impl App {
                 };
                 let export_dir = self.paths.data_dir.join("exports");
                 // Re-query with the workbench's current filter so the export
-                // reflects what the user sees (alerts_list is the legacy vec).
+                // reflects what the user sees.
                 let alerts = match self.db.list_alerts(&filter) {
                     Ok(a) => a,
                     Err(e) => {
@@ -1254,11 +1243,6 @@ impl App {
             self.triage_note_input.clear();
             self.triage_input_target = crate::types::TriageInputTarget::default();
             self.input_mode = InputMode::Normal;
-        } else if self.alerts_detail_view {
-            self.alerts_detail_view = false;
-        } else if self.alerts_bulk_mode {
-            self.alerts_bulk_mode = false;
-            self.alerts_selected_bulk.clear();
         } else if self.articles_reader {
             self.articles_reader = false;
             self.refresh_articles();
@@ -1366,7 +1350,6 @@ impl App {
                 self.tags_assignment_mode = false;
                 self.tags_assignment_target = None;
                 self.refresh_feeds();
-                self.refresh_alerts();
                 self.refresh_workbench();
                 self.refresh_keywords();
                 self.set_notification("Tags updated".into(), NotificationType::Success);
@@ -1453,7 +1436,6 @@ impl App {
                 ConfirmDialog::DeleteKeyword { id, .. } => match self.db.delete_keyword(id) {
                     Ok(()) => {
                         self.refresh_keywords();
-                        self.refresh_alerts();
                         self.refresh_workbench();
                         self.set_notification("Keyword deleted".into(), NotificationType::Success);
                     }
@@ -1474,7 +1456,6 @@ impl App {
                 },
                 ConfirmDialog::DeleteAlert { id } => match self.db.delete_alert(id) {
                     Ok(()) => {
-                        self.refresh_alerts();
                         self.refresh_workbench();
                         self.refresh_indicators();
                         self.refresh_dashboard();
@@ -1492,7 +1473,6 @@ impl App {
                                 format!("Deleted {} old alerts", count),
                                 NotificationType::Success,
                             );
-                            self.refresh_alerts();
                             self.refresh_workbench();
                             self.refresh_indicators();
                             self.refresh_dashboard();
@@ -1515,26 +1495,6 @@ impl App {
                             format!("Failed to delete notification: {e}"),
                             NotificationType::Error,
                         ),
-                    }
-                }
-                ConfirmDialog::BulkDeleteAlerts { .. } => {
-                    let ids: Vec<i64> = self.alerts_selected_bulk.iter().copied().collect();
-                    match self.db.delete_alerts_by_ids(&ids) {
-                        Ok(count) => {
-                            self.alerts_bulk_mode = false;
-                            self.alerts_selected_bulk.clear();
-                            self.refresh_alerts();
-                            self.refresh_workbench();
-                            self.refresh_indicators();
-                            self.refresh_dashboard();
-                            self.set_notification(
-                                format!("Deleted {} alerts", count),
-                                NotificationType::Success,
-                            );
-                        }
-                        Err(e) => {
-                            self.set_notification(format!("Error: {}", e), NotificationType::Error)
-                        }
                     }
                 }
             }
@@ -1599,29 +1559,6 @@ impl App {
                 .db
                 .list_feed_fetch_attempts(feed.feed.id, 5)
                 .unwrap_or_default();
-        }
-    }
-
-    pub fn refresh_alerts(&mut self) {
-        let filter = AlertFilter {
-            text: if self.alerts_filter.is_empty() {
-                None
-            } else {
-                Some(self.alerts_filter.clone())
-            },
-            criticality: self.alerts_filter_criticality,
-            unread_only: self.alerts_filter_unread_only,
-            status: self.alerts_filter_status,
-            disposition: self.alerts_filter_disposition,
-            open_only: self.alerts_hide_closed,
-            limit: Some(500),
-            ..AlertFilter::default()
-        };
-        if let Ok(alerts) = self.db.list_alerts(&filter) {
-            self.alerts_list = alerts;
-        }
-        if self.alerts_selected >= self.alerts_list.len() && !self.alerts_list.is_empty() {
-            self.alerts_selected = self.alerts_list.len() - 1;
         }
     }
 
@@ -1828,7 +1765,6 @@ impl App {
                             .prune_health_logs(feed.id, self.config.max_health_log_entries);
                         self.refresh_feeds();
                         self.refresh_articles();
-                        self.refresh_alerts();
                         self.refresh_workbench();
                         self.refresh_indicators();
                         self.refresh_dashboard();
