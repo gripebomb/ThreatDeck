@@ -13,6 +13,7 @@
 // (mirrors the crate-level `#![allow(dead_code)]` stance).
 #![allow(unused_imports)]
 
+pub mod alert_details;
 pub mod alert_list;
 pub mod layout;
 pub mod state;
