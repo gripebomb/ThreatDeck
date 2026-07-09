@@ -861,13 +861,20 @@ impl App {
             }
             AppAction::AlertMarkSelectedRead => {
                 if let Some(id) = self.workbench.selected_alert_id() {
-                    let _ = self.db.mark_alert_read(id, true);
-                    self.refresh_workbench();
-                    self.refresh_dashboard();
-                    self.set_notification(
-                        "Alert marked as read".to_string(),
-                        crate::types::NotificationType::Success,
-                    );
+                    match self.db.mark_alert_read(id, true) {
+                        Ok(()) => {
+                            self.refresh_workbench();
+                            self.refresh_dashboard();
+                            self.set_notification(
+                                "Alert marked as read".to_string(),
+                                crate::types::NotificationType::Success,
+                            );
+                        }
+                        Err(e) => self.set_notification(
+                            format!("Failed to mark alert read: {e}"),
+                            crate::types::NotificationType::Error,
+                        ),
+                    }
                 } else {
                     self.set_notification(
                         "No alert selected".to_string(),
@@ -877,13 +884,20 @@ impl App {
             }
             AppAction::AlertMarkSelectedUnread => {
                 if let Some(id) = self.workbench.selected_alert_id() {
-                    let _ = self.db.mark_alert_read(id, false);
-                    self.refresh_workbench();
-                    self.refresh_dashboard();
-                    self.set_notification(
-                        "Alert marked as unread".to_string(),
-                        crate::types::NotificationType::Success,
-                    );
+                    match self.db.mark_alert_read(id, false) {
+                        Ok(()) => {
+                            self.refresh_workbench();
+                            self.refresh_dashboard();
+                            self.set_notification(
+                                "Alert marked as unread".to_string(),
+                                crate::types::NotificationType::Success,
+                            );
+                        }
+                        Err(e) => self.set_notification(
+                            format!("Failed to mark alert unread: {e}"),
+                            crate::types::NotificationType::Error,
+                        ),
+                    }
                 } else {
                     self.set_notification(
                         "No alert selected".to_string(),
@@ -891,15 +905,20 @@ impl App {
                     );
                 }
             }
-            AppAction::AlertMarkVisibleRead => {
-                let _ = self.db.mark_all_alerts_read(true);
-                self.refresh_workbench();
-                self.refresh_dashboard();
-                self.set_notification(
-                    "All alerts marked as read".to_string(),
-                    crate::types::NotificationType::Success,
-                );
-            }
+            AppAction::AlertMarkVisibleRead => match self.db.mark_all_alerts_read(true) {
+                Ok(()) => {
+                    self.refresh_workbench();
+                    self.refresh_dashboard();
+                    self.set_notification(
+                        "All alerts marked as read".to_string(),
+                        crate::types::NotificationType::Success,
+                    );
+                }
+                Err(e) => self.set_notification(
+                    format!("Failed to mark alerts read: {e}"),
+                    crate::types::NotificationType::Error,
+                ),
+            },
             AppAction::AlertExportSelectedMarkdown => {
                 if self.workbench.selected_alert_id().is_some() {
                     // Reuse the workbench exporter (operates on the selected
