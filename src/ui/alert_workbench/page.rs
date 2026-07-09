@@ -15,6 +15,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
+    text::{Line, Span},
     widgets::Paragraph,
     Frame,
 };
@@ -108,7 +109,8 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     draw_status_bar(f, status_area, app);
 }
 
-/// One-line key-hint + focus/tab status.
+/// One-line status + key-hint bar. Shows a load error (red) when present,
+/// otherwise an alert/unread count for orientation, followed by key hints.
 fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
     let focus = match app.workbench.focused_pane {
         AlertPane::AlertList => "List",
@@ -116,16 +118,48 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App) {
         AlertPane::ContextPanel => "Context",
     };
     let tab = app.workbench.bottom_tab.label();
+
+    let status: Vec<Span> = if let Some(err) = &app.workbench.last_error {
+        let msg = truncate_for_status(&format!("⚠ {err}"), area.width);
+        vec![Span::styled(
+            format!(" {msg} "),
+            Style::default().fg(app.theme.error),
+        )]
+    } else {
+        let n = app.workbench_items.len();
+        let unread = app.workbench_items.iter().filter(|i| !i.read).count();
+        let label = if unread > 0 {
+            format!(" {n} alerts · {unread} unread ")
+        } else {
+            format!(" {n} alerts ")
+        };
+        vec![Span::styled(label, Style::default().fg(app.theme.muted))]
+    };
+
     let hint = format!(
-        " j/k move · Tab focus · [/] tabs · J/K or Ctrl-d/u scroll · r refresh · / filter · ? help · q quit   [Focus: {focus} | Tab: {tab}] "
+        "j/k move · Tab focus · [/] tabs · J/K or Ctrl-d/u scroll · r refresh · / filter · ? help · q quit   [Focus: {focus} | Tab: {tab}] "
     );
-    let bar = Paragraph::new(hint).style(
+
+    let mut line_spans = status;
+    line_spans.push(Span::styled(hint, Style::default().fg(app.theme.muted)));
+
+    let bar = Paragraph::new(Line::from(line_spans)).style(
         Style::default()
-            .fg(app.theme.muted)
             .bg(app.theme.surface)
             .add_modifier(Modifier::BOLD),
     );
     f.render_widget(bar, area);
+}
+
+/// Truncate a status-bar message so it leaves room for the key hints
+/// (~40% of the bar width). Char-based to stay multibyte-safe.
+fn truncate_for_status(msg: &str, width: u16) -> String {
+    let budget = (width as usize).saturating_mul(4) / 10;
+    if msg.chars().count() <= budget {
+        return msg.to_string();
+    }
+    let truncated: String = msg.chars().take(budget.saturating_sub(1)).collect();
+    format!("{truncated}…")
 }
 
 /// Half-page scroll increment (matches the shared list motion helper).
@@ -286,6 +320,29 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn status_bar_shows_error_when_present() {
+        let (mut app, path) = build_app("sberr", 2);
+        app.workbench.set_error(Some("database locked".into()));
+        let text = render_text(&mut app, 120, 30);
+        assert!(text.contains('⚠'), "error glyph missing:\n{text}");
+        assert!(
+            text.contains("database locked"),
+            "error text missing:\n{text}"
+        );
+        drop(app);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn status_bar_shows_alert_count_when_no_error() {
+        let (mut app, path) = build_app("sbcount", 5);
+        let text = render_text(&mut app, 120, 30);
+        assert!(text.contains("5 alerts"), "count missing:\n{text}");
+        drop(app);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

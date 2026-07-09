@@ -1468,6 +1468,10 @@ impl App {
     // bar drives the workbench.
 
     /// Reload the alert list + selected-alert bundle for the workbench.
+    ///
+    /// Any load failure is recorded in `workbench.last_error` (stale data is
+    /// kept) and surfaced in the status bar / panes. A successful full reload
+    /// clears the error.
     pub fn refresh_workbench(&mut self) {
         self.workbench.alert_filter = AlertFilterState {
             text: self.alerts_filter.clone(),
@@ -1477,19 +1481,51 @@ impl App {
             unread_only: self.alerts_filter_unread_only,
             hide_closed: self.alerts_hide_closed,
         };
-        if let Ok(items) = self.load_alert_workbench_items(&self.workbench.alert_filter) {
-            self.workbench
-                .restore_selection_by_id(items.len(), |i| items.get(i).map(|x| x.id));
-            self.workbench_items = items;
+        // A fresh full reload starts with a clean slate.
+        self.workbench.set_error(None);
+
+        match self.load_alert_workbench_items(&self.workbench.alert_filter) {
+            Ok(items) => {
+                self.workbench
+                    .restore_selection_by_id(items.len(), |i| items.get(i).map(|x| x.id));
+                self.workbench_items = items;
+            }
+            Err(e) => self
+                .workbench
+                .set_error(Some(format!("Failed to load alerts: {e}"))),
         }
         self.workbench_sync_selection();
-        self.refresh_workbench_bundle();
+
+        // Load the bundle WITHOUT clearing the error on success — a list error
+        // recorded above must stay visible. Only a bundle failure adds one.
+        self.workbench_bundle = match self.workbench.selected_alert_id {
+            Some(id) => match self.load_selected_alert_bundle(id) {
+                Ok(b) => b,
+                Err(e) => {
+                    self.workbench
+                        .set_error(Some(format!("Failed to load alert context: {e}")));
+                    None
+                }
+            },
+            None => None,
+        };
     }
 
     /// Reload the bundle for the currently selected alert (no list reload).
+    /// Used after a selection move: a successful load clears any prior error.
     pub fn refresh_workbench_bundle(&mut self) {
         self.workbench_bundle = match self.workbench.selected_alert_id {
-            Some(id) => self.load_selected_alert_bundle(id).ok().flatten(),
+            Some(id) => match self.load_selected_alert_bundle(id) {
+                Ok(b) => {
+                    self.workbench.set_error(None);
+                    b
+                }
+                Err(e) => {
+                    self.workbench
+                        .set_error(Some(format!("Failed to load alert context: {e}")));
+                    None
+                }
+            },
             None => None,
         };
     }
@@ -2092,5 +2128,69 @@ mod workbench_tests {
 
         drop(db);
         let _ = std::fs::remove_file(path);
+    }
+
+    // ── Loading / error states (Ticket 08) ─────────────────────────────────
+
+    fn build_app(db: Db) -> App {
+        use crate::types::Screen;
+        let paths = Paths {
+            config_dir: PathBuf::new(),
+            data_dir: PathBuf::new(),
+            config_file: PathBuf::new(),
+            db_file: PathBuf::new(),
+        };
+        let mut app = App::new(db, AppConfig::default(), paths);
+        app.screen = Screen::Alerts;
+        app
+    }
+
+    #[test]
+    fn refresh_workbench_records_error_when_schema_missing() {
+        // A DB opened WITHOUT init_schema has no `alerts` table, so the list
+        // load deterministically fails — exercising the error-capture path.
+        let path = std::env::temp_dir().join(format!(
+            "threatdeck-wb-err-{}-{}.db",
+            std::process::id(),
+            "noschema"
+        ));
+        let _ = std::fs::remove_file(&path);
+        let db = Db::open(&path).unwrap(); // intentionally no init_schema
+        let mut app = build_app(db);
+        app.refresh_workbench();
+
+        let err = app
+            .workbench
+            .last_error
+            .as_deref()
+            .expect("a load error should be recorded");
+        assert!(
+            err.contains("Failed to load alerts"),
+            "unexpected error text: {err}"
+        );
+        // Stale (empty) state is kept; no panic; no selection.
+        assert!(app.workbench_items.is_empty());
+        assert!(app.workbench.selected_alert_id.is_none());
+
+        drop(app);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn successful_refresh_clears_workbench_error() {
+        let (db, path) = temp_db("clearerr");
+        let mut app = build_app(db);
+        // Plant a stale error; a successful reload must clear it.
+        app.workbench.set_error(Some("stale".into()));
+        app.refresh_workbench();
+        assert!(
+            app.workbench.last_error.is_none(),
+            "error should clear after a successful reload"
+        );
+        // init_schema seeded a demo catalog, so the list is non-empty.
+        assert!(!app.workbench_items.is_empty());
+
+        drop(app);
+        let _ = std::fs::remove_file(&path);
     }
 }

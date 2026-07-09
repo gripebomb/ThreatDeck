@@ -45,6 +45,17 @@ pub fn draw_alert_details(
                 .add_modifier(Modifier::BOLD),
         );
 
+    // Precedence: error > loading > no-selection > content.
+    if let Some(err) = &state.last_error {
+        let msg = format!("⚠ Couldn't load this alert:\n\n{err}");
+        let error = Paragraph::new(msg)
+            .style(Style::default().fg(theme.error))
+            .alignment(Alignment::Center)
+            .block(block);
+        f.render_widget(error, area);
+        return;
+    }
+
     if state.is_loading_details {
         let loading = Paragraph::new("Loading alert details…")
             .style(Style::default().fg(theme.muted))
@@ -402,6 +413,24 @@ mod tests {
         );
         // Should not render the detail content while loading.
         assert!(!text.contains("Ransomware campaign"));
+    }
+
+    #[test]
+    fn shows_error_state_when_error_set() {
+        let mut state = focused_state();
+        state.last_error = Some("disk full".into());
+        let detail = sample_detail();
+        let text = render_text(Some(&detail), &state, 70, 16);
+        assert!(
+            text.contains("Couldn't load this alert"),
+            "error state missing:\n{text}"
+        );
+        assert!(text.contains("disk full"), "error detail missing:\n{text}");
+        // Detail content must not render while an error is shown.
+        assert!(
+            !text.contains("Feed:"),
+            "content rendered during error:\n{text}"
+        );
     }
 
     #[test]

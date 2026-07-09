@@ -47,6 +47,13 @@ pub fn draw_context_panel(
                 .add_modifier(Modifier::BOLD),
         );
 
+    // Precedence: error > loading > no-selection > tabbed content.
+    if let Some(err) = &state.last_error {
+        let msg = format!("⚠ Couldn't load this alert's context:\n\n{err}");
+        render_block_message(f, area, block, &msg, theme.error);
+        return;
+    }
+
     if state.is_loading_details {
         render_block_message(f, area, block, "Loading context…", theme.muted);
         return;
@@ -617,6 +624,22 @@ mod tests {
         assert!(
             text.contains("Loading context"),
             "loading state missing:\n{text}"
+        );
+    }
+
+    #[test]
+    fn shows_error_state_when_error_set() {
+        let mut state = state_on_tab(AlertContextTab::Indicators);
+        state.last_error = Some("database locked".into());
+        let bundle = bundle_with(vec![], None, vec![]);
+        let text = render_text(Some(&bundle), &state, 80, 16);
+        assert!(
+            text.contains("Couldn't load"),
+            "error state missing:\n{text}"
+        );
+        assert!(
+            text.contains("database locked"),
+            "error detail missing:\n{text}"
         );
     }
 

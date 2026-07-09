@@ -52,13 +52,21 @@ pub fn draw_alert_list(
         );
 
     if items.is_empty() {
-        let msg = if state.alert_filter.is_empty() {
-            "No alerts to show.\n\nAdjust filters or refresh to load alerts."
+        let (msg, color) = if let Some(err) = &state.last_error {
+            (format!("⚠ Couldn't load alerts:\n\n{err}"), theme.error)
+        } else if state.alert_filter.is_empty() {
+            (
+                "No alerts to show.\n\nAdjust filters or refresh to load alerts.".to_string(),
+                theme.muted,
+            )
         } else {
-            "No alerts match the current filter.\n\nClear the filter to see more."
+            (
+                "No alerts match the current filter.\n\nClear the filter to see more.".to_string(),
+                theme.muted,
+            )
         };
         let empty = Paragraph::new(msg)
-            .style(Style::default().fg(theme.muted))
+            .style(Style::default().fg(color))
             .alignment(Alignment::Center)
             .block(block);
         f.render_widget(empty, area);
@@ -313,6 +321,29 @@ mod tests {
             text.contains("(filtered)"),
             "filtered title tag missing:\n{text}"
         );
+    }
+
+    #[test]
+    fn empty_state_shows_load_error_when_present() {
+        let mut state = AlertWorkbenchState::new();
+        state.last_error = Some("database is locked".into());
+        let text = joined(&render_rows(&[], &state, 60, 12));
+        assert!(
+            text.contains("Couldn't load alerts"),
+            "error message missing:\n{text}"
+        );
+        assert!(
+            text.contains("database is locked"),
+            "error detail missing:\n{text}"
+        );
+    }
+
+    #[test]
+    fn empty_state_without_error_still_mentions_filters() {
+        let state = AlertWorkbenchState::new();
+        let text = joined(&render_rows(&[], &state, 60, 12));
+        assert!(text.contains("No alerts"), "{text}");
+        assert!(!text.contains("Couldn't load"), "{text}");
     }
 
     // ── One alert ────────────────────────────────────────────────────────────
