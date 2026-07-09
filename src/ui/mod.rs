@@ -1,3 +1,4 @@
+pub mod alert_workbench;
 pub mod alerts;
 pub mod articles;
 pub mod command_palette;

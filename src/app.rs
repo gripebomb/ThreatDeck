@@ -1,3 +1,4 @@
+use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::collections::{HashMap, HashSet};
 use std::time::Instant;
@@ -5,12 +6,17 @@ use std::time::Instant;
 use crate::auto_fetch::{AutoFetchMessage, AutoFetcher};
 use crate::config::{AppConfig, Paths, TlsTrustStore};
 use crate::db::{
-    AlertFilter, Db, EnrichmentJobWithContext, EnrichmentProviderRecord, IndicatorRecord,
-    IndicatorSearch,
+    AlertFilter, Db, EnrichmentJobWithContext, EnrichmentProviderRecord, EnrichmentResultRecord,
+    IndicatorRecord, IndicatorSearch,
 };
 use crate::theme::{get_runtime_theme, Theme};
 use crate::types::*;
 use crate::ui;
+use crate::ui::alert_workbench::view_models::{
+    AlertDetailViewModel, AlertListItem, AlertWorkbenchBundle, EnrichmentViewModel,
+    IndicatorViewModel, TriageEventViewModel,
+};
+use crate::ui::alert_workbench::AlertFilterState;
 use crate::ui::command_palette::{AppAction, CommandAction, CommandId, CommandPalette, ModalKind};
 use std::sync::mpsc;
 
@@ -18,6 +24,139 @@ use std::sync::mpsc;
 pub enum InputMode {
     Normal,
     Typing,
+}
+
+// ── Alert workbench app services ──────────────────────────────────────────────
+//
+// The app layer owns loading the split-pane alert workbench data. These free
+// functions are the only consumers of storage for the workbench; the TUI
+// renders the resulting view models and never issues SQL. See
+// `tickets/02-workbench-view-models-and-data-bundle.md` and
+// `docs/ARCHITECTURE.md` (Responsibility Boundaries).
+
+/// Load the alert list as workbench view models.
+pub fn load_alert_workbench_list(db: &Db, filter: &AlertFilterState) -> Result<Vec<AlertListItem>> {
+    let db_filter = AlertFilter {
+        text: if filter.text.is_empty() {
+            None
+        } else {
+            Some(filter.text.clone())
+        },
+        criticality: filter.severity,
+        unread_only: filter.unread_only,
+        status: filter.status,
+        disposition: filter.disposition,
+        open_only: filter.hide_closed,
+        limit: Some(500),
+        ..AlertFilter::default()
+    };
+    let rows = db.list_alerts(&db_filter)?;
+    Ok(rows.iter().map(AlertListItem::from).collect())
+}
+
+/// Load the full selected-alert bundle: details plus indicators (with nested
+/// enrichment), metadata, and triage history.
+///
+/// Returns `Ok(None)` when the alert no longer exists (e.g. deleted before the
+/// load completed). Missing optional data (no IOCs, no history) yields a bundle
+/// with empty lists, not an error.
+pub fn load_alert_workbench_bundle(db: &Db, alert_id: i64) -> Result<Option<AlertWorkbenchBundle>> {
+    let alert = match db.get_alert(alert_id)? {
+        Some(a) => a,
+        None => return Ok(None),
+    };
+
+    let feed = db.get_feed(alert.feed_id)?;
+    let keyword = db.get_keyword(alert.keyword_id)?;
+    let tags = db.get_alert_tags(alert.id)?;
+
+    let tag_names = tags.iter().map(|t| t.name.clone()).collect::<Vec<_>>();
+    let feed_name = feed
+        .as_ref()
+        .map(|f| f.name.clone())
+        .unwrap_or_else(|| "(unknown feed)".to_string());
+    let feed_url = feed.as_ref().map(|f| f.url.clone());
+    let keyword_pattern = keyword
+        .as_ref()
+        .map(|k| k.pattern.clone())
+        .unwrap_or_else(|| "(unknown keyword)".to_string());
+
+    let detail =
+        AlertDetailViewModel::from_parts(&alert, feed_name, feed_url, keyword_pattern, tag_names);
+
+    // Indicators, each with its latest enrichment results nested.
+    let mut indicators: Vec<IndicatorViewModel> = db
+        .list_indicators_for_alert(alert.id)?
+        .iter()
+        .map(IndicatorViewModel::from)
+        .collect();
+    for indicator in &mut indicators {
+        let enrichment = db.get_latest_enrichment_results(indicator.id)?;
+        indicator.enrichment = enrichment.iter().map(EnrichmentViewModel::from).collect();
+    }
+
+    let triage_history = db
+        .list_alert_triage_events(alert.id)?
+        .iter()
+        .map(TriageEventViewModel::from)
+        .collect();
+
+    // Raw feed-item content is optional and currently unresolvable: alerts
+    // carry no direct link back to their originating feed item.
+    Ok(Some(AlertWorkbenchBundle {
+        detail: Some(detail),
+        indicators,
+        metadata_json: alert.metadata_json.clone(),
+        triage_history,
+        raw_content: None,
+    }))
+}
+
+// Storage-row → view-model conversions live in the app layer so the TUI never
+// imports storage row types. (Both sides are local to this crate, so these
+// `From` impls are permitted here under the orphan rules.)
+impl From<&IndicatorRecord> for IndicatorViewModel {
+    fn from(value: &IndicatorRecord) -> Self {
+        Self {
+            id: value.id,
+            indicator_type: value.indicator_type,
+            value: value.value.clone(),
+            normalized_value: value.normalized_value.clone(),
+            sighting_count: value.sighting_count,
+            confidence: value.confidence_score,
+            risk: value.risk_score,
+            // Enrichment is attached by the loader after construction.
+            enrichment: Vec::new(),
+        }
+    }
+}
+
+impl From<&EnrichmentResultRecord> for EnrichmentViewModel {
+    fn from(value: &EnrichmentResultRecord) -> Self {
+        Self {
+            provider_id: value.provider_id,
+            status: value.status.clone(),
+            reputation: value.reputation.clone(),
+            score: value.score,
+            verdict: value.verdict.clone(),
+            summary: value.summary.clone(),
+            fetched_at: value.fetched_at,
+        }
+    }
+}
+
+impl From<&crate::db::AlertTriageEvent> for TriageEventViewModel {
+    fn from(value: &crate::db::AlertTriageEvent) -> Self {
+        Self {
+            id: value.id,
+            event_type: value.event_type.clone(),
+            old_value: value.old_value.clone(),
+            new_value: value.new_value.clone(),
+            note: value.note.clone(),
+            actor: value.actor.clone(),
+            created_at: value.created_at,
+        }
+    }
 }
 
 pub struct App {
@@ -1291,6 +1430,27 @@ impl App {
         }
     }
 
+    // ── Alert workbench (split-pane view) service delegators ─────────────────
+    //
+    // Thin wrappers over the free-function app services so the TUI can load
+    // workbench data through `App` without reaching into `Db` directly.
+
+    /// Load the alert list as workbench view models for the given filter.
+    pub fn load_alert_workbench_items(
+        &self,
+        filter: &AlertFilterState,
+    ) -> Result<Vec<AlertListItem>> {
+        load_alert_workbench_list(&self.db, filter)
+    }
+
+    /// Load the full selected-alert bundle (details + context data).
+    pub fn load_selected_alert_bundle(
+        &self,
+        alert_id: i64,
+    ) -> Result<Option<AlertWorkbenchBundle>> {
+        load_alert_workbench_bundle(&self.db, alert_id)
+    }
+
     pub fn refresh_articles(&mut self) {
         let filter = FeedItemFilter {
             text: if self.articles_filter.is_empty() {
@@ -1585,5 +1745,290 @@ impl App {
         if self.settings_auto_fetch_enabled {
             self.start_auto_fetch();
         }
+    }
+}
+
+#[cfg(test)]
+mod workbench_tests {
+    //! Integration tests for the alert workbench app services (Ticket 02).
+    //!
+    //! These exercise the full storage → view-model path: they seed a temp DB
+    //! and assert the bundle/list loaders return the right view-model shapes
+    //! (never raw DB rows). Missing optional data yields empty lists, not errors.
+    use super::*;
+    use crate::db::{AlertCreate, Db, EnrichmentProviderCreate, FeedCreate, KeywordCreate};
+    use crate::types::{Criticality, FeedType};
+    use sentinel_enrichment::{EnrichmentResult, Reputation};
+    use sentinel_ioc::{ExtractedIndicator, IndicatorType};
+    use std::path::PathBuf;
+
+    fn temp_db(name: &str) -> (Db, PathBuf) {
+        let path = std::env::temp_dir().join(format!(
+            "threatdeck-workbench-{}-{}.db",
+            name,
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let db = Db::open(&path).unwrap();
+        db.init_schema().unwrap();
+        (db, path)
+    }
+
+    fn seed_feed_keyword(db: &Db) -> (i64, i64) {
+        let feed_id = db
+            .create_feed(&FeedCreate {
+                name: "IOC Feed".into(),
+                url: "https://ioc.example.test/feed.xml".into(),
+                feed_type: FeedType::Rss,
+                enabled: true,
+                interval_secs: 300,
+                ..FeedCreate::default()
+            })
+            .unwrap();
+        let keyword_id = db
+            .create_keyword(&KeywordCreate {
+                pattern: "ransomware".into(),
+                criticality: Criticality::High,
+                enabled: true,
+                ..KeywordCreate::default()
+            })
+            .unwrap();
+        (feed_id, keyword_id)
+    }
+
+    fn create_alert(
+        db: &Db,
+        feed_id: i64,
+        keyword_id: i64,
+        title: &str,
+        metadata: Option<&str>,
+    ) -> i64 {
+        db.create_alert(&AlertCreate {
+            feed_id,
+            keyword_id,
+            title: Some(title.into()),
+            content_snippet: "Ransomware mentions CVE-2025-12345".into(),
+            criticality: Criticality::High,
+            content_hash: format!("hash-{title}"),
+            metadata_json: metadata.map(str::to_string),
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn bundle_loads_alert_details_and_metadata() {
+        let (db, path) = temp_db("details");
+        let (feed_id, keyword_id) = seed_feed_keyword(&db);
+        let alert_id = create_alert(
+            &db,
+            feed_id,
+            keyword_id,
+            "Ransomware alert",
+            Some(r#"{"source":"feed"}"#),
+        );
+
+        let bundle = load_alert_workbench_bundle(&db, alert_id).unwrap().unwrap();
+
+        let detail = bundle.detail.expect("detail should be present");
+        assert_eq!(detail.id, alert_id);
+        assert_eq!(detail.title.as_deref(), Some("Ransomware alert"));
+        assert_eq!(detail.severity, Criticality::High);
+        assert_eq!(detail.feed_name, "IOC Feed");
+        assert_eq!(
+            detail.feed_url.as_deref(),
+            Some("https://ioc.example.test/feed.xml")
+        );
+        assert_eq!(detail.keyword_pattern, "ransomware");
+        assert_eq!(detail.status, crate::types::AlertStatus::New);
+        assert_eq!(
+            bundle.metadata_json.as_deref(),
+            Some(r#"{"source":"feed"}"#)
+        );
+        // No indicators/history seeded yet.
+        assert!(bundle.indicators.is_empty());
+        assert!(bundle.triage_history.is_empty());
+
+        drop(db);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn bundle_with_no_indicators_returns_empty_list() {
+        let (db, path) = temp_db("no-iocs");
+        let (feed_id, keyword_id) = seed_feed_keyword(&db);
+        let alert_id = create_alert(&db, feed_id, keyword_id, "Plain alert", None);
+
+        let bundle = load_alert_workbench_bundle(&db, alert_id).unwrap().unwrap();
+        assert!(bundle.indicators.is_empty());
+
+        drop(db);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn bundle_loads_indicators_with_enrichment() {
+        let (db, path) = temp_db("iocs");
+        let (feed_id, keyword_id) = seed_feed_keyword(&db);
+        let alert_id = create_alert(&db, feed_id, keyword_id, "IOC alert", None);
+
+        // Store + link an indicator to the alert.
+        let ids = db
+            .store_extracted_indicators(
+                &[ExtractedIndicator {
+                    indicator_type: IndicatorType::Cve,
+                    value: "CVE-2025-12345".into(),
+                    normalized_value: "CVE-2025-12345".into(),
+                    source_field: "content_snippet".into(),
+                    start_offset: 0,
+                    end_offset: 14,
+                    surrounding_text: "CVE-2025-12345".into(),
+                    confidence_hint: Some(90),
+                }],
+                Some(alert_id),
+                None,
+                Some(feed_id),
+            )
+            .unwrap();
+
+        // Add an enrichment result for that indicator.
+        let provider_id = db
+            .create_enrichment_provider(&EnrichmentProviderCreate {
+                name: "cisa-kev".into(),
+                provider_type: "cisa_kev".into(),
+                enabled: true,
+                supports_types: vec![IndicatorType::Cve],
+                ..EnrichmentProviderCreate::default()
+            })
+            .unwrap();
+        db.store_enrichment_result(
+            ids[0],
+            provider_id,
+            &EnrichmentResult {
+                provider_name: "cisa-kev".into(),
+                indicator_type: IndicatorType::Cve,
+                normalized_value: "CVE-2025-12345".into(),
+                reputation: Reputation::Malicious,
+                score: Some(95),
+                verdict: Some("known-exploited".into()),
+                summary: Some("Listed in CISA KEV".into()),
+                raw_json: serde_json::json!({"kev": true}),
+                expires_at: None,
+            },
+        )
+        .unwrap();
+
+        let bundle = load_alert_workbench_bundle(&db, alert_id).unwrap().unwrap();
+        assert_eq!(bundle.indicators.len(), 1);
+        let indicator = &bundle.indicators[0];
+        assert_eq!(indicator.indicator_type, IndicatorType::Cve);
+        assert_eq!(indicator.normalized_value, "CVE-2025-12345");
+        assert_eq!(indicator.type_label(), "CVE");
+        assert_eq!(indicator.enrichment.len(), 1);
+        let enrich = &indicator.enrichment[0];
+        assert_eq!(enrich.reputation.as_deref(), Some("Malicious"));
+        assert_eq!(enrich.score, Some(95));
+        assert_eq!(enrich.verdict.as_deref(), Some("known-exploited"));
+
+        drop(db);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn bundle_loads_triage_history() {
+        let (db, path) = temp_db("history");
+        let (feed_id, keyword_id) = seed_feed_keyword(&db);
+        let alert_id = create_alert(&db, feed_id, keyword_id, "History alert", None);
+
+        // A status change records a triage event.
+        db.update_alert_status(
+            alert_id,
+            crate::types::AlertStatus::Acknowledged,
+            Some("acknowledged by analyst"),
+        )
+        .unwrap();
+
+        let bundle = load_alert_workbench_bundle(&db, alert_id).unwrap().unwrap();
+        assert_eq!(bundle.triage_history.len(), 1);
+        let event = &bundle.triage_history[0];
+        assert_eq!(event.event_type, "status_changed");
+        assert_eq!(event.new_value.as_deref(), Some("Acknowledged"));
+        assert_eq!(event.note.as_deref(), Some("acknowledged by analyst"));
+        // Detail should reflect the new status.
+        assert_eq!(
+            bundle.detail.as_ref().unwrap().status,
+            crate::types::AlertStatus::Acknowledged
+        );
+
+        drop(db);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn bundle_for_missing_alert_returns_none() {
+        let (db, path) = temp_db("missing");
+        assert!(load_alert_workbench_bundle(&db, 999_999).unwrap().is_none());
+
+        drop(db);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn list_loader_returns_view_models() {
+        let (db, path) = temp_db("list");
+        let (feed_id, keyword_id) = seed_feed_keyword(&db);
+        // `init_schema` seeds a demo catalog, so compare against a baseline.
+        let before = load_alert_workbench_list(&db, &AlertFilterState::default())
+            .unwrap()
+            .len();
+        let id1 = create_alert(&db, feed_id, keyword_id, "First alert", None);
+        let id2 = create_alert(&db, feed_id, keyword_id, "Second alert", None);
+
+        let items = load_alert_workbench_list(&db, &AlertFilterState::default()).unwrap();
+        assert_eq!(items.len(), before + 2);
+        let ids: Vec<i64> = items.iter().map(|i| i.id).collect();
+        assert!(ids.contains(&id1));
+        assert!(ids.contains(&id2));
+        // The newly created items carry feed/keyword context as view models.
+        for item in items.iter().filter(|i| i.id == id1 || i.id == id2) {
+            assert_eq!(item.feed_name, "IOC Feed");
+            assert_eq!(item.keyword_pattern, "ransomware");
+            assert_eq!(item.severity, Criticality::High);
+        }
+
+        drop(db);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn list_loader_honours_hide_closed_filter() {
+        let (db, path) = temp_db("filter");
+        let (feed_id, keyword_id) = seed_feed_keyword(&db);
+        let open_id = create_alert(&db, feed_id, keyword_id, "Open alert", None);
+        let closed_id = create_alert(&db, feed_id, keyword_id, "Closed alert", None);
+        // Close one (requires a disposition per Alert.can_close()).
+        db.update_alert_disposition(
+            closed_id,
+            crate::types::AlertDisposition::FalsePositive,
+            None,
+        )
+        .unwrap();
+        db.close_alert(
+            closed_id,
+            crate::types::AlertDisposition::FalsePositive,
+            None,
+        )
+        .unwrap();
+
+        let filter = AlertFilterState {
+            hide_closed: true,
+            ..AlertFilterState::default()
+        };
+        let items = load_alert_workbench_list(&db, &filter).unwrap();
+        let ids: Vec<i64> = items.iter().map(|i| i.id).collect();
+        assert!(ids.contains(&open_id));
+        assert!(!ids.contains(&closed_id));
+
+        drop(db);
+        let _ = std::fs::remove_file(path);
     }
 }
