@@ -1586,4 +1586,285 @@ impl App {
             self.start_auto_fetch();
         }
     }
+
+    pub fn get_alert_workbench_bundle(&self, alert_id: i64) -> Option<AlertWorkbenchBundle> {
+        let data = self.db.get_alert_report_data(alert_id).ok()??;
+
+        let detail = AlertDetailViewModel {
+            id: data.alert.id,
+            title: data.alert.title.clone().unwrap_or_default(),
+            content_snippet: data.alert.content_snippet.clone(),
+            criticality: data.alert.criticality,
+            effective_severity: data.alert.effective_severity(),
+            status: data.alert.status,
+            disposition: data.alert.disposition,
+            read: data.alert.read,
+            confidence_score: data.alert.confidence_score,
+            owner: data.alert.owner.clone(),
+            triage_notes: data.alert.triage_notes.clone(),
+            detected_at: data.alert.detected_at,
+            feed_name: data.feed_name.clone(),
+            keyword_pattern: data.keyword_pattern.clone(),
+            tags: data.tags.clone(),
+            metadata_json: data.alert.metadata_json.clone(),
+            acknowledged_at: data.alert.acknowledged_at,
+            investigating_at: data.alert.investigating_at,
+            escalated_at: data.alert.escalated_at,
+            closed_at: data.alert.closed_at,
+            closed_reason: data.alert.closed_reason.clone(),
+        };
+
+        let indicators = data
+            .indicators
+            .iter()
+            .map(|ind| {
+                let enrichments = self
+                    .db
+                    .get_latest_enrichment_results(ind.id)
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|er| EnrichmentViewModel {
+                        provider_id: er.provider_id,
+                        status: er.status.clone(),
+                        reputation: er.reputation.clone(),
+                        score: er.score,
+                        verdict: er.verdict.clone(),
+                        summary: er.summary.clone(),
+                        fetched_at: er.fetched_at,
+                    })
+                    .collect();
+                IndicatorViewModel {
+                    id: ind.id,
+                    indicator_type: format!("{:?}", ind.indicator_type),
+                    value: ind.value.clone(),
+                    normalized_value: ind.normalized_value.clone(),
+                    sighting_count: ind.sighting_count,
+                    confidence_score: ind.confidence_score,
+                    risk_score: ind.risk_score,
+                    first_seen_at: ind.first_seen_at,
+                    last_seen_at: ind.last_seen_at,
+                    enrichments,
+                }
+            })
+            .collect();
+
+        let triage_events = data
+            .triage_history
+            .iter()
+            .map(|ev| TriageEventViewModel {
+                id: ev.id,
+                event_type: ev.event_type.clone(),
+                old_value: ev.old_value.clone(),
+                new_value: ev.new_value.clone(),
+                note: ev.note.clone(),
+                actor: ev.actor.clone().unwrap_or_default(),
+                created_at: ev.created_at,
+            })
+            .collect();
+
+        Some(AlertWorkbenchBundle {
+            detail,
+            indicators,
+            triage_events,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::App;
+    use crate::config::{AppConfig, Paths};
+    use crate::db::{AlertCreate, Db, FeedCreate, KeywordCreate};
+    use crate::types::{AlertStatus, Criticality, FeedType};
+    use std::path::PathBuf;
+
+    fn temp_db_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("threatdeck-app-{}-{}.db", name, std::process::id()))
+    }
+
+    fn setup_app(name: &str) -> (App, i64, i64) {
+        let path = temp_db_path(name);
+        let _ = std::fs::remove_file(&path);
+        let db = Db::open(&path).unwrap();
+        db.init_schema().unwrap();
+        let feed_id = db
+            .create_feed(&FeedCreate {
+                name: "Test".into(),
+                url: "https://example.com/feed.xml".into(),
+                feed_type: FeedType::Rss,
+                enabled: true,
+                interval_secs: 300,
+                ..FeedCreate::default()
+            })
+            .unwrap();
+        let keyword_id = db
+            .create_keyword(&KeywordCreate {
+                pattern: "breach".into(),
+                criticality: Criticality::High,
+                enabled: true,
+                ..KeywordCreate::default()
+            })
+            .unwrap();
+        let paths = Paths {
+            config_dir: PathBuf::new(),
+            data_dir: PathBuf::new(),
+            config_file: PathBuf::new(),
+            db_file: path,
+        };
+        let app = App::new(db, AppConfig::default(), paths);
+        (app, feed_id, keyword_id)
+    }
+
+    #[test]
+    fn test_bundle_loads_selected_alert() {
+        let (app, feed_id, keyword_id) = setup_app("bundle_loads");
+        let alert_id = app
+            .db
+            .create_alert(&AlertCreate {
+                feed_id,
+                keyword_id,
+                title: Some("Test Alert".into()),
+                content_snippet: "test content".into(),
+                criticality: Criticality::High,
+                content_hash: "hash".into(),
+                metadata_json: Some(r#"{"key":"value"}"#.into()),
+            })
+            .unwrap();
+        let bundle = app.get_alert_workbench_bundle(alert_id);
+        assert!(bundle.is_some());
+        let bundle = bundle.unwrap();
+        assert_eq!(bundle.detail.id, alert_id);
+        assert_eq!(bundle.detail.title, "Test Alert");
+        assert_eq!(bundle.detail.feed_name, "Test");
+        assert!(bundle.detail.metadata_json.is_some());
+        let _ = std::fs::remove_file(&app.paths.db_file);
+    }
+
+    #[test]
+    fn test_bundle_returns_none_for_missing_alert() {
+        let (app, _feed_id, _keyword_id) = setup_app("bundle_missing");
+        assert!(app.get_alert_workbench_bundle(99999).is_none());
+        let _ = std::fs::remove_file(&app.paths.db_file);
+    }
+
+    #[test]
+    fn test_bundle_empty_indicators_when_none_exist() {
+        let (app, feed_id, keyword_id) = setup_app("bundle_empty_iocs");
+        let alert_id = app
+            .db
+            .create_alert(&AlertCreate {
+                feed_id,
+                keyword_id,
+                title: Some("Test Alert".into()),
+                content_snippet: "test content".into(),
+                criticality: Criticality::High,
+                content_hash: "hash".into(),
+                metadata_json: None,
+            })
+            .unwrap();
+        let bundle = app.get_alert_workbench_bundle(alert_id).unwrap();
+        assert!(bundle.indicators.is_empty());
+        let _ = std::fs::remove_file(&app.paths.db_file);
+    }
+
+    #[test]
+    fn test_bundle_returns_indicators() {
+        let (app, feed_id, keyword_id) = setup_app("bundle_iocs");
+        let alert_id = app
+            .db
+            .create_alert(&AlertCreate {
+                feed_id,
+                keyword_id,
+                title: Some("Test Alert".into()),
+                content_snippet: "test content".into(),
+                criticality: Criticality::High,
+                content_hash: "hash".into(),
+                metadata_json: None,
+            })
+            .unwrap();
+        app.db
+            .store_extracted_indicators(
+                &[sentinel_ioc::ExtractedIndicator {
+                    indicator_type: sentinel_ioc::IndicatorType::Cve,
+                    value: "CVE-2025-12345".into(),
+                    normalized_value: "CVE-2025-12345".into(),
+                    source_field: "content_snippet".into(),
+                    start_offset: 0,
+                    end_offset: 14,
+                    surrounding_text: "CVE-2025-12345".into(),
+                    confidence_hint: Some(90),
+                }],
+                Some(alert_id),
+                None,
+                Some(feed_id),
+            )
+            .unwrap();
+        let bundle = app.get_alert_workbench_bundle(alert_id).unwrap();
+        assert_eq!(bundle.indicators.len(), 1);
+        assert_eq!(bundle.indicators[0].value, "CVE-2025-12345");
+        assert!(bundle.indicators[0].enrichments.is_empty());
+        let _ = std::fs::remove_file(&app.paths.db_file);
+    }
+
+    #[test]
+    fn test_bundle_returns_triage_history() {
+        let (app, feed_id, keyword_id) = setup_app("bundle_triage");
+        let alert_id = app
+            .db
+            .create_alert(&AlertCreate {
+                feed_id,
+                keyword_id,
+                title: Some("Test Alert".into()),
+                content_snippet: "test content".into(),
+                criticality: Criticality::High,
+                content_hash: "hash".into(),
+                metadata_json: None,
+            })
+            .unwrap();
+        app.db
+            .update_alert_status(alert_id, AlertStatus::Acknowledged, Some("acknowledging"))
+            .unwrap();
+        let bundle = app.get_alert_workbench_bundle(alert_id).unwrap();
+        assert_eq!(bundle.triage_events.len(), 1);
+        assert_eq!(bundle.triage_events[0].event_type, "status_changed");
+        let _ = std::fs::remove_file(&app.paths.db_file);
+    }
+
+    #[test]
+    fn test_bundle_empty_enrichment_when_none_exist() {
+        let (app, feed_id, keyword_id) = setup_app("bundle_empty_enrich");
+        let alert_id = app
+            .db
+            .create_alert(&AlertCreate {
+                feed_id,
+                keyword_id,
+                title: Some("Test Alert".into()),
+                content_snippet: "test content".into(),
+                criticality: Criticality::High,
+                content_hash: "hash".into(),
+                metadata_json: None,
+            })
+            .unwrap();
+        app.db
+            .store_extracted_indicators(
+                &[sentinel_ioc::ExtractedIndicator {
+                    indicator_type: sentinel_ioc::IndicatorType::Cve,
+                    value: "CVE-2025-12345".into(),
+                    normalized_value: "CVE-2025-12345".into(),
+                    source_field: "content_snippet".into(),
+                    start_offset: 0,
+                    end_offset: 14,
+                    surrounding_text: "CVE-2025-12345".into(),
+                    confidence_hint: Some(90),
+                }],
+                Some(alert_id),
+                None,
+                Some(feed_id),
+            )
+            .unwrap();
+        let bundle = app.get_alert_workbench_bundle(alert_id).unwrap();
+        assert!(!bundle.indicators.is_empty());
+        assert!(bundle.indicators[0].enrichments.is_empty());
+        let _ = std::fs::remove_file(&app.paths.db_file);
+    }
 }
