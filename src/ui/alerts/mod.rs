@@ -1,13 +1,17 @@
+pub mod alert_details;
+pub mod alert_list;
+pub mod context_tabs;
 pub mod layout;
+pub mod render;
 pub mod state;
 
 use crate::app::App;
-use crate::ui::list::{criticality_label, motion_from_key, move_selection, selected_style};
+use crate::ui::list::{criticality_label, motion_from_key, move_selection};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Modifier, Style},
-    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table, TableState},
+    widgets::{Block, Borders, Cell, Clear, Paragraph, Row, Table},
     Frame,
 };
 
@@ -68,75 +72,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         );
     f.render_widget(title, chunks[0]);
 
-    let header = Row::new(vec![
-        "Read", "Sev", "Status", "Disp", "Feed", "Keyword", "Snippet", "Detected", "Owner",
-    ])
-    .style(
-        Style::default()
-            .add_modifier(Modifier::BOLD)
-            .fg(app.theme.primary),
-    );
-
-    let mut table_state = TableState::default();
-    table_state.select(Some(app.alerts_selected));
-
-    let rows: Vec<Row> = app
-        .alerts_list
-        .iter()
-        .map(|a| {
-            let style = Style::default().fg(app.theme.fg);
-            let read_mark = if a.alert.read { "○" } else { "●" };
-            let sev_color =
-                crate::theme::criticality_color(app.theme, a.alert.effective_severity());
-            let sev_str = criticality_label(a.alert.effective_severity());
-            let status_str = format!("{}", a.alert.status);
-            let disp_str = format!("{}", a.alert.disposition);
-            let snippet = truncate_chars(&a.alert.content_snippet, 36);
-            let time_str = a.alert.detected_at.format("%Y-%m-%d %H:%M").to_string();
-            let owner_str = a.alert.owner.as_deref().unwrap_or("-");
-
-            Row::new(vec![
-                Cell::from(read_mark).style(Style::default().fg(if a.alert.read {
-                    app.theme.muted
-                } else {
-                    app.theme.primary
-                })),
-                Cell::from(sev_str)
-                    .style(Style::default().fg(sev_color).add_modifier(Modifier::BOLD)),
-                Cell::from(status_str),
-                Cell::from(disp_str),
-                Cell::from(a.feed_name.as_str()),
-                Cell::from(a.keyword_pattern.as_str()),
-                Cell::from(snippet),
-                Cell::from(time_str),
-                Cell::from(owner_str),
-            ])
-            .style(style)
-        })
-        .collect();
-
-    let table = Table::new(
-        rows,
-        vec![
-            Constraint::Length(5),
-            Constraint::Length(6),
-            Constraint::Length(10),
-            Constraint::Length(8),
-            Constraint::Min(12),
-            Constraint::Min(12),
-            Constraint::Min(22),
-            Constraint::Length(16),
-            Constraint::Min(10),
-        ],
-    )
-    .header(header)
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(app.theme.border)),
-    )
-    .row_highlight_style(selected_style());
-    f.render_stateful_widget(table, chunks[1], &mut table_state);
+    render::draw_workbench(f, app, chunks[1]);
 
     let status_text = if app.filter_active {
         "-- FILTER -- Type search | [Enter] Keep | [Esc] Clear"
@@ -885,7 +821,7 @@ mod tests {
     use crate::db::{AlertCreate, Db, FeedCreate, KeywordCreate};
     use crate::types::{Criticality, FeedType};
     use ratatui::{backend::TestBackend, Terminal};
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     fn temp_db_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -971,5 +907,160 @@ mod tests {
             truncate_chars(&format!("{}é and more", "a".repeat(39)), 40),
             format!("{}é...", "a".repeat(39))
         );
+    }
+
+    fn setup_app_with_alerts(count: usize, path: &Path) -> App {
+        let db = Db::open(path).unwrap();
+        db.init_schema().unwrap();
+        let feed_id = db
+            .create_feed(&FeedCreate {
+                name: "TestFeed".into(),
+                url: "https://example.com/feed.xml".into(),
+                feed_type: FeedType::Rss,
+                enabled: true,
+                interval_secs: 300,
+                ..FeedCreate::default()
+            })
+            .unwrap();
+        let keyword_id = db
+            .create_keyword(&KeywordCreate {
+                pattern: "breach".into(),
+                criticality: Criticality::High,
+                enabled: true,
+                ..KeywordCreate::default()
+            })
+            .unwrap();
+        for i in 0..count {
+            db.create_alert(&AlertCreate {
+                feed_id,
+                keyword_id,
+                title: Some(format!("Alert #{}", i)),
+                content_snippet: format!("Suspicious activity detected #{}", i),
+                criticality: Criticality::High,
+                content_hash: format!("hash-{}", i),
+                metadata_json: Some(
+                    serde_json::json!({"source": "test", "priority": i}).to_string(),
+                ),
+            })
+            .unwrap();
+        }
+        let paths = Paths {
+            config_dir: PathBuf::new(),
+            data_dir: PathBuf::new(),
+            config_file: PathBuf::new(),
+            db_file: path.to_path_buf(),
+        };
+        let mut app = App::new(db, AppConfig::default(), paths);
+        app.screen = crate::types::Screen::Alerts;
+        app
+    }
+
+    #[test]
+    fn render_no_alerts() {
+        let path = temp_db_path("empty");
+        let _ = std::fs::remove_file(&path);
+        let mut app = setup_app_with_alerts(0, &path);
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn render_one_alert() {
+        let path = temp_db_path("one");
+        let _ = std::fs::remove_file(&path);
+        let mut app = setup_app_with_alerts(1, &path);
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn render_many_alerts() {
+        let path = temp_db_path("many");
+        let _ = std::fs::remove_file(&path);
+        let mut app = setup_app_with_alerts(20, &path);
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn render_selected_alert_details() {
+        let path = temp_db_path("details");
+        let _ = std::fs::remove_file(&path);
+        let mut app = setup_app_with_alerts(3, &path);
+        // Bundle is auto-loaded by refresh_workbench in App::new
+        assert!(app.workbench_bundle.is_some());
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn render_no_iocs() {
+        let path = temp_db_path("noioc");
+        let _ = std::fs::remove_file(&path);
+        let mut app = setup_app_with_alerts(1, &path);
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        // IOCs tab should show empty state
+        assert!(app.workbench_bundle.is_some());
+        assert!(app.workbench_bundle.as_ref().unwrap().indicators.is_empty());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn render_metadata_tab() {
+        let path = temp_db_path("meta");
+        let _ = std::fs::remove_file(&path);
+        let mut app = setup_app_with_alerts(2, &path);
+        app.workbench_state.active_context_tab =
+            crate::ui::alerts::state::AlertContextTab::Metadata;
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn render_triage_history_tab() {
+        let path = temp_db_path("history");
+        let _ = std::fs::remove_file(&path);
+        let mut app = setup_app_with_alerts(1, &path);
+        app.workbench_state.active_context_tab =
+            crate::ui::alerts::state::AlertContextTab::TriageHistory;
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn render_narrow_terminal() {
+        let path = temp_db_path("narrow");
+        let _ = std::fs::remove_file(&path);
+        let mut app = setup_app_with_alerts(5, &path);
+        let backend = TestBackend::new(80, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn render_tiny_terminal() {
+        let path = temp_db_path("tiny");
+        let _ = std::fs::remove_file(&path);
+        let mut app = setup_app_with_alerts(1, &path);
+        let backend = TestBackend::new(10, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+        // Must not panic
+        terminal.draw(|frame| draw(frame, &mut app)).unwrap();
+        let _ = std::fs::remove_file(path);
     }
 }

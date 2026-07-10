@@ -11,6 +11,7 @@ use crate::db::{
 use crate::theme::{get_runtime_theme, Theme};
 use crate::types::*;
 use crate::ui;
+use crate::ui::alerts::state::AlertWorkbenchState;
 use crate::ui::command_palette::{AppAction, CommandAction, CommandId, CommandPalette, ModalKind};
 use std::sync::mpsc;
 
@@ -73,6 +74,10 @@ pub struct App {
     pub triage_enum_selected: usize,
     pub triage_note_input_mode: bool,
     pub triage_note_input: String,
+
+    // Alert Workbench
+    pub workbench_state: AlertWorkbenchState,
+    pub workbench_bundle: Option<AlertWorkbenchBundle>,
     pub triage_input_target: crate::types::TriageInputTarget,
 
     // Articles
@@ -193,6 +198,8 @@ impl App {
             triage_enum_selected: 0,
             triage_note_input_mode: false,
             triage_note_input: String::new(),
+            workbench_state: AlertWorkbenchState::default(),
+            workbench_bundle: None,
             triage_input_target: crate::types::TriageInputTarget::default(),
             articles_list: Vec::new(),
             articles_selected: 0,
@@ -1289,8 +1296,18 @@ impl App {
         if self.alerts_selected >= self.alerts_list.len() && !self.alerts_list.is_empty() {
             self.alerts_selected = self.alerts_list.len() - 1;
         }
+        self.refresh_workbench();
     }
 
+    pub fn refresh_workbench(&mut self) {
+        let items: Vec<AlertListItem> = self.alerts_list.iter().map(AlertListItem::from).collect();
+        self.workbench_state.set_alerts(items);
+        self.workbench_state.selected_alert_index = self.alerts_selected;
+        self.workbench_bundle = self
+            .workbench_state
+            .selected_alert_id()
+            .and_then(|id| self.get_alert_workbench_bundle(id));
+    }
     pub fn refresh_articles(&mut self) {
         let filter = FeedItemFilter {
             text: if self.articles_filter.is_empty() {
