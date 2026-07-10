@@ -50,6 +50,7 @@ pub struct AlertWorkbenchState {
     pub focused_pane: AlertPane,
     pub active_context_tab: AlertContextTab,
     pub selected_alert_index: usize,
+    pub selected_ioc_index: usize,
     pub filter: AlertFilterState,
     pub sort_mode: AlertSortMode,
     pub list_scroll: u16,
@@ -65,6 +66,7 @@ impl AlertWorkbenchState {
             focused_pane: AlertPane::default(),
             active_context_tab: AlertContextTab::default(),
             selected_alert_index: 0,
+            selected_ioc_index: 0,
             filter: AlertFilterState::default(),
             sort_mode: AlertSortMode::default(),
             list_scroll: 0,
@@ -167,6 +169,34 @@ impl AlertWorkbenchState {
     /// Reset only the context pane scroll. Called on selection change.
     pub fn reset_context_scroll(&mut self) {
         self.context_scroll = 0;
+    }
+
+    /// Move IOC selection up by one. Clamps at 0.
+    pub fn move_ioc_selection_up(&mut self) {
+        if self.selected_ioc_index > 0 {
+            self.selected_ioc_index -= 1;
+        }
+    }
+
+    /// Move IOC selection down by one. Clamps at `max - 1`.
+    pub fn move_ioc_selection_down(&mut self, max: usize) {
+        if max > 0 && self.selected_ioc_index + 1 < max {
+            self.selected_ioc_index += 1;
+        }
+    }
+
+    /// Reset IOC selection to the first indicator.
+    pub fn reset_ioc_selection(&mut self) {
+        self.selected_ioc_index = 0;
+    }
+
+    /// Clamp IOC selection to valid bounds for the given IOC count.
+    pub fn clamp_ioc_selection(&mut self, len: usize) {
+        if len == 0 {
+            self.selected_ioc_index = 0;
+        } else if self.selected_ioc_index >= len {
+            self.selected_ioc_index = len - 1;
+        }
     }
 }
 

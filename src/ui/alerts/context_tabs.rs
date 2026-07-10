@@ -105,7 +105,16 @@ fn draw_iocs(f: &mut Frame, app: &App, area: Rect, indicators: &[IndicatorViewMo
             .fg(app.theme.primary)
             .add_modifier(Modifier::BOLD),
     );
-    let rows = indicators.iter().map(|ind| {
+    let selected = app.workbench_state.selected_ioc_index;
+    let rows = indicators.iter().enumerate().map(|(i, ind)| {
+        let style = if i == selected {
+            Style::default()
+                .fg(app.theme.primary)
+                .bg(app.theme.surface)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(app.theme.fg)
+        };
         Row::new(vec![
             Cell::from(ind.indicator_type.as_str()),
             Cell::from(ind.normalized_value.as_str()),
@@ -123,7 +132,7 @@ fn draw_iocs(f: &mut Frame, app: &App, area: Rect, indicators: &[IndicatorViewMo
                     .unwrap_or("-"),
             ),
         ])
-        .style(Style::default().fg(app.theme.fg))
+        .style(style)
     });
     let table = Table::new(
         rows,

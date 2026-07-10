@@ -9,8 +9,8 @@
 //! work regardless of focused pane.
 
 use crate::app::App;
-use crate::types::{AlertStatus, Criticality, NotificationType, TriageEnumTarget};
-use crate::ui::alerts::state::AlertPane;
+use crate::types::{Criticality, NotificationType, TriageEnumTarget};
+use crate::ui::alerts::state::{AlertContextTab, AlertPane};
 use crate::ui::list::{motion_from_key, move_selection};
 use crossterm::event::{KeyCode, KeyEvent};
 
@@ -34,39 +34,23 @@ pub fn handle_workbench_key(app: &mut App, key: KeyEvent) {
         }
         // Triage actions (operate on selected alert from any pane)
         KeyCode::Char('A') => {
-            triage_set_status(app, AlertStatus::Acknowledged);
+            app.triage_acknowledge();
             return;
         }
         KeyCode::Char('I') => {
-            triage_set_status(app, AlertStatus::Investigating);
+            app.triage_investigate();
             return;
         }
         KeyCode::Char('E') => {
-            triage_set_status(app, AlertStatus::Escalated);
+            app.triage_escalate();
             return;
         }
         KeyCode::Char('O') => {
-            if let Some(a) = app.alerts_list.get(app.alerts_selected) {
-                let _ = app.db.reopen_alert(a.alert.id, None);
-                app.refresh_alerts();
-                app.set_notification("Alert reopened".into(), NotificationType::Success);
-            }
+            app.triage_reopen();
             return;
         }
         KeyCode::Char('C') => {
-            if let Some(a) = app.alerts_list.get(app.alerts_selected) {
-                if !a.alert.can_close() {
-                    app.set_notification(
-                        "Select disposition before closing (T)".into(),
-                        NotificationType::Warning,
-                    );
-                    return;
-                }
-                let _ = app.db.close_alert(a.alert.id, a.alert.disposition, None);
-                let _ = app.db.mark_alert_read(a.alert.id, true);
-                app.refresh_alerts();
-                app.set_notification("Alert closed".into(), NotificationType::Success);
-            }
+            app.triage_close();
             return;
         }
         KeyCode::Char('N') => {
@@ -158,6 +142,10 @@ pub fn handle_workbench_key(app: &mut App, key: KeyEvent) {
             app.refresh_alerts();
             return;
         }
+        KeyCode::Char('x') => {
+            app.export_selected_alert_markdown();
+            return;
+        }
         _ => {}
     }
 
@@ -178,6 +166,7 @@ fn handle_list_pane_key(app: &mut App, key: KeyEvent) {
             app.workbench_state.selected_alert_index = new_idx;
             app.workbench_state.detail_scroll = 0;
             app.workbench_state.context_scroll = 0;
+            app.workbench_state.reset_ioc_selection();
             app.refresh_workbench_bundle();
         }
         return;
@@ -212,17 +201,57 @@ fn handle_scroll_pane_key(app: &mut App, key: KeyEvent) {
     }
 }
 
-/// Handle keys for the context panel (tabs + scroll).
+/// Handle keys for the context panel.
+///
+/// IOC tab: j/k moves IOC selection, y copies IOC, e enriches IOC.
+/// Other tabs: j/k scrolls content.
+/// All tabs: [/] switches tabs.
 fn handle_context_pane_key(app: &mut App, key: KeyEvent) {
+    // Tab switching works on any tab
     match key.code {
         KeyCode::Char('[') => {
             app.workbench_state.cycle_context_tab_prev();
             app.workbench_state.context_scroll = 0;
+            return;
         }
         KeyCode::Char(']') => {
             app.workbench_state.cycle_context_tab_next();
             app.workbench_state.context_scroll = 0;
+            return;
         }
+        _ => {}
+    }
+
+    // IOC-tab-specific keys: selection movement, copy, enrich
+    if app.workbench_state.active_context_tab == AlertContextTab::Iocs {
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                let len = app
+                    .workbench_bundle
+                    .as_ref()
+                    .map(|b| b.indicators.len())
+                    .unwrap_or(0);
+                app.workbench_state.move_ioc_selection_down(len);
+                return;
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                app.workbench_state.move_ioc_selection_up();
+                return;
+            }
+            KeyCode::Char('y') => {
+                copy_selected_ioc(app);
+                return;
+            }
+            KeyCode::Char('e') => {
+                enrich_selected_ioc(app);
+                return;
+            }
+            _ => {}
+        }
+    }
+
+    // Non-IOC tabs: j/k scrolls content
+    match key.code {
         KeyCode::Char('j') | KeyCode::Down => {
             app.workbench_state.context_scroll =
                 app.workbench_state.context_scroll.saturating_add(1);
@@ -235,27 +264,88 @@ fn handle_context_pane_key(app: &mut App, key: KeyEvent) {
     }
 }
 
-// ── Triage helpers ─────────────────────────────────────────────────────────
+// ── IOC helpers ────────────────────────────────────────────────────────────
 
-/// Update the selected alert's status, mark it read, and refresh.
-fn triage_set_status(app: &mut App, status: AlertStatus) {
-    if let Some(a) = app.alerts_list.get(app.alerts_selected) {
-        let _ = app.db.update_alert_status(a.alert.id, status, None);
-        let _ = app.db.mark_alert_read(a.alert.id, true);
-        app.refresh_alerts();
-        let msg = match status {
-            AlertStatus::Acknowledged => "Alert acknowledged",
-            AlertStatus::Investigating => "Investigation started",
-            AlertStatus::Escalated => "Alert escalated",
-            _ => "Status updated",
-        };
-        let ntype = if status == AlertStatus::Escalated {
-            NotificationType::Warning
-        } else {
-            NotificationType::Success
-        };
-        app.set_notification(msg.into(), ntype);
+/// Copy the selected IOC value to the system clipboard.
+/// Falls back to showing the value in a notification if no clipboard tool exists.
+fn copy_selected_ioc(app: &mut App) {
+    let Some(bundle) = app.workbench_bundle.as_ref() else {
+        app.set_notification("No alert loaded".into(), NotificationType::Warning);
+        return;
+    };
+    let Some(ind) = bundle
+        .indicators
+        .get(app.workbench_state.selected_ioc_index)
+    else {
+        app.set_notification("No IOC selected".into(), NotificationType::Warning);
+        return;
+    };
+    let value = ind.normalized_value.clone();
+    match try_copy_to_clipboard(&value) {
+        Ok(()) => {
+            app.set_notification(format!("Copied: {}", value), NotificationType::Success);
+        }
+        Err(_) => {
+            // Clipboard tool unavailable — show value so user can copy manually
+            app.set_notification(
+                format!("Clipboard unavailable. IOC value: {}", value),
+                NotificationType::Info,
+            );
+        }
     }
+}
+
+/// Queue enrichment for the selected IOC.
+fn enrich_selected_ioc(app: &mut App) {
+    let Some(bundle) = app.workbench_bundle.as_ref() else {
+        app.set_notification("No alert loaded".into(), NotificationType::Warning);
+        return;
+    };
+    let Some(ind) = bundle
+        .indicators
+        .get(app.workbench_state.selected_ioc_index)
+    else {
+        app.set_notification("No IOC selected".into(), NotificationType::Warning);
+        return;
+    };
+    let id = ind.id;
+    let label = ind.normalized_value.clone();
+    app.enrich_indicator(id, &label);
+}
+
+/// Try to copy text to the system clipboard via platform commands.
+///
+/// Tries `pbcopy` (macOS), `clip.exe` (Windows), `wl-copy` (Wayland),
+/// or `xclip` (X11). Returns `Err` if no clipboard tool is available.
+fn try_copy_to_clipboard(text: &str) -> Result<(), ()> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let (program, args): (&str, &[&str]) = if cfg!(target_os = "macos") {
+        ("pbcopy", &[])
+    } else if cfg!(target_os = "windows") {
+        ("clip.exe", &[])
+    } else if std::env::var("WAYLAND_DISPLAY").is_ok() {
+        ("wl-copy", &[])
+    } else {
+        ("xclip", &["-selection", "clipboard"])
+    };
+
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .spawn()
+        .map_err(|_| ())?;
+
+    child
+        .stdin
+        .take()
+        .ok_or(())?
+        .write_all(text.as_bytes())
+        .map_err(|_| ())?;
+
+    let _ = child.wait();
+    Ok(())
 }
 
 #[cfg(test)]
@@ -454,10 +544,12 @@ mod tests {
 
     #[test]
     fn context_pane_jk_scrolls() {
+        // On non-IOC tabs, j/k scrolls content
         let path = temp_db_path("cscroll");
         let _ = std::fs::remove_file(&path);
         let mut app = setup_app(1, &path);
         app.workbench_state.focused_pane = AlertPane::Context;
+        app.workbench_state.active_context_tab = AlertContextTab::Metadata;
         app.workbench_state.context_scroll = 0;
         handle_workbench_key(&mut app, make_key(KeyCode::Char('j')));
         assert_eq!(app.workbench_state.context_scroll, 1);
@@ -516,6 +608,144 @@ mod tests {
         handle_workbench_key(&mut app, make_key(KeyCode::Char('r')));
         // Same alert should still be selected
         assert_eq!(app.workbench_state.selected_alert_id(), selected_id);
+        let _ = std::fs::remove_file(path);
+    }
+
+    // ── Phase 4: Analyst Actions tests ───────────────────────────────────────
+
+    /// Helper: add indicators to the first alert so IOC tests have data.
+    fn add_iocs_to_first_alert(app: &mut App, count: usize) {
+        let alert_id = app.workbench_state.selected_alert_id().unwrap();
+        let indicators: Vec<sentinel_ioc::ExtractedIndicator> = (0..count)
+            .map(|i| sentinel_ioc::ExtractedIndicator {
+                indicator_type: sentinel_ioc::IndicatorType::Cve,
+                value: format!("CVE-2025-{}", 10000 + i),
+                normalized_value: format!("CVE-2025-{}", 10000 + i),
+                source_field: "content_snippet".into(),
+                start_offset: 0,
+                end_offset: 13,
+                surrounding_text: String::new(),
+                confidence_hint: Some(90),
+            })
+            .collect();
+        app.db
+            .store_extracted_indicators(&indicators, Some(alert_id), None, None)
+            .unwrap();
+        // Reload bundle so indicators appear
+        app.refresh_workbench_bundle();
+    }
+
+    #[test]
+    fn context_pane_ioc_tab_jk_moves_ioc_selection() {
+        let path = temp_db_path("iocsel");
+        let _ = std::fs::remove_file(&path);
+        let mut app = setup_app(1, &path);
+        add_iocs_to_first_alert(&mut app, 3);
+        app.workbench_state.focused_pane = AlertPane::Context;
+        app.workbench_state.active_context_tab = AlertContextTab::Iocs;
+        assert_eq!(app.workbench_state.selected_ioc_index, 0);
+        handle_workbench_key(&mut app, make_key(KeyCode::Char('j')));
+        assert_eq!(app.workbench_state.selected_ioc_index, 1);
+        handle_workbench_key(&mut app, make_key(KeyCode::Char('j')));
+        assert_eq!(app.workbench_state.selected_ioc_index, 2);
+        // Clamp at bottom
+        handle_workbench_key(&mut app, make_key(KeyCode::Char('j')));
+        assert_eq!(app.workbench_state.selected_ioc_index, 2);
+        // Move up
+        handle_workbench_key(&mut app, make_key(KeyCode::Char('k')));
+        assert_eq!(app.workbench_state.selected_ioc_index, 1);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn x_exports_selected_alert() {
+        let path = temp_db_path("export");
+        let _ = std::fs::remove_file(&path);
+        let mut app = setup_app(1, &path);
+        handle_workbench_key(&mut app, make_key(KeyCode::Char('x')));
+        // Export should succeed — notification set to Success
+        let (msg, ntype) = app.notification.as_ref().unwrap();
+        assert_eq!(*ntype, NotificationType::Success);
+        assert!(msg.contains("Exported"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn export_no_alert_shows_warning() {
+        let path = temp_db_path("noalert_export");
+        let _ = std::fs::remove_file(&path);
+        let mut app = setup_app(0, &path);
+        app.workbench_state.selected_alert_index = 999;
+        app.alerts_selected = 999;
+        handle_workbench_key(&mut app, make_key(KeyCode::Char('x')));
+        let (msg, ntype) = app.notification.as_ref().unwrap();
+        assert_eq!(*ntype, NotificationType::Warning);
+        assert!(msg.contains("No alert selected"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn y_copies_ioc_value() {
+        let path = temp_db_path("copy");
+        let _ = std::fs::remove_file(&path);
+        let mut app = setup_app(1, &path);
+        add_iocs_to_first_alert(&mut app, 2);
+        app.workbench_state.focused_pane = AlertPane::Context;
+        app.workbench_state.active_context_tab = AlertContextTab::Iocs;
+        handle_workbench_key(&mut app, make_key(KeyCode::Char('y')));
+        // Clipboard tool may or may not exist — either "Copied:" or "Clipboard unavailable"
+        // In both cases the IOC value should appear in the notification
+        let (msg, _) = app.notification.as_ref().unwrap();
+        assert!(msg.contains("CVE-2025-10000"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn y_with_no_ioc_shows_warning() {
+        let path = temp_db_path("noioc");
+        let _ = std::fs::remove_file(&path);
+        let mut app = setup_app(1, &path);
+        app.workbench_state.focused_pane = AlertPane::Context;
+        app.workbench_state.active_context_tab = AlertContextTab::Iocs;
+        handle_workbench_key(&mut app, make_key(KeyCode::Char('y')));
+        // No IOC loaded in bundle — should show warning or info
+        let (_, ntype) = app.notification.as_ref().unwrap();
+        assert!(matches!(
+            *ntype,
+            NotificationType::Warning | NotificationType::Info
+        ));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn e_enriches_selected_ioc() {
+        let path = temp_db_path("enrich");
+        let _ = std::fs::remove_file(&path);
+        let mut app = setup_app(1, &path);
+        add_iocs_to_first_alert(&mut app, 1);
+        app.workbench_state.focused_pane = AlertPane::Context;
+        app.workbench_state.active_context_tab = AlertContextTab::Iocs;
+        handle_workbench_key(&mut app, make_key(KeyCode::Char('e')));
+        // Enrichment config may be enabled (Success/Info) or disabled (Warning)
+        let (_, ntype) = app.notification.as_ref().unwrap();
+        assert!(matches!(
+            *ntype,
+            NotificationType::Success | NotificationType::Info | NotificationType::Warning
+        ));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn ioc_selection_resets_on_alert_change() {
+        let path = temp_db_path("iocreset");
+        let _ = std::fs::remove_file(&path);
+        let mut app = setup_app(3, &path);
+        // Move IOC selection to a non-zero index
+        app.workbench_state.selected_ioc_index = 2;
+        // Change alert selection in the list pane
+        handle_workbench_key(&mut app, make_key(KeyCode::Char('j')));
+        // IOC selection should have reset to 0
+        assert_eq!(app.workbench_state.selected_ioc_index, 0);
         let _ = std::fs::remove_file(path);
     }
 }
