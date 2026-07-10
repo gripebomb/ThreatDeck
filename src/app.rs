@@ -1300,9 +1300,26 @@ impl App {
     }
 
     pub fn refresh_workbench(&mut self) {
+        let prev_id = self.workbench_state.selected_alert_id();
         let items: Vec<AlertListItem> = self.alerts_list.iter().map(AlertListItem::from).collect();
         self.workbench_state.set_alerts(items);
-        self.workbench_state.selected_alert_index = self.alerts_selected;
+        // Preserve selection by alert ID when possible
+        if let Some(id) = prev_id {
+            if let Some(idx) = self.workbench_state.alerts.iter().position(|a| a.id == id) {
+                self.workbench_state.selected_alert_index = idx;
+            }
+        }
+        self.alerts_selected = self.workbench_state.selected_alert_index;
+        self.workbench_bundle = self
+            .workbench_state
+            .selected_alert_id()
+            .and_then(|id| self.get_alert_workbench_bundle(id));
+    }
+
+    /// Reload only the workbench bundle for the current selection,
+    /// without re-syncing the alert list. Called after selection changes.
+    pub fn refresh_workbench_bundle(&mut self) {
+        self.alerts_selected = self.workbench_state.selected_alert_index;
         self.workbench_bundle = self
             .workbench_state
             .selected_alert_id()
