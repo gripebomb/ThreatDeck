@@ -32,7 +32,6 @@ docs/
 tickets/
 
 # Understand Anything
-.understand-anything/intermediate/
-.understand-anything/diff-overlay.json
+.understand-anything/
 
 exports/
