@@ -2468,6 +2468,54 @@ impl Db {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
+    /// Fetch the latest result per provider for every requested indicator in
+    /// one query. Indicators without enrichment are absent from the map.
+    pub fn get_latest_enrichment_results_for_indicators(
+        &self,
+        indicator_ids: &[i64],
+    ) -> Result<HashMap<i64, Vec<EnrichmentResultRecord>>> {
+        let mut results = HashMap::with_capacity(indicator_ids.len());
+        if indicator_ids.is_empty() {
+            return Ok(results);
+        }
+        let placeholders = vec!["?"; indicator_ids.len()].join(",");
+        let sql = format!(
+            "SELECT er.id, er.indicator_id, er.provider_id, er.status, er.reputation,
+                    er.score, er.verdict, er.summary, er.raw_json, er.fetched_at,
+                    er.expires_at, er.created_at, er.updated_at
+             FROM enrichment_results er
+             JOIN (
+                SELECT indicator_id, provider_id, MAX(fetched_at) AS fetched_at
+                FROM enrichment_results
+                WHERE indicator_id IN ({placeholders})
+                GROUP BY indicator_id, provider_id
+             ) latest
+               ON latest.indicator_id = er.indicator_id
+              AND latest.provider_id = er.provider_id
+              AND latest.fetched_at = er.fetched_at
+             WHERE er.indicator_id IN ({placeholders})
+             ORDER BY er.indicator_id, er.fetched_at DESC"
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::ToSql> = indicator_ids
+            .iter()
+            .map(|id| id as &dyn rusqlite::ToSql)
+            .chain(indicator_ids.iter().map(|id| id as &dyn rusqlite::ToSql))
+            .collect();
+        let rows = stmt.query_map(
+            rusqlite::params_from_iter(params),
+            Self::row_to_enrichment_result,
+        )?;
+        for row in rows {
+            let record = row?;
+            results
+                .entry(record.indicator_id)
+                .or_insert_with(Vec::new)
+                .push(record);
+        }
+        Ok(results)
+    }
+
     pub fn get_enrichment_job(&self, id: i64) -> Result<Option<EnrichmentJobRecord>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, indicator_id, provider_id, status, priority, attempt_count,
@@ -3584,6 +3632,71 @@ mod tests {
         assert_eq!(results[0].verdict.as_deref(), Some("Known Exploited"));
         let indicator = db.get_indicator(indicator_id).unwrap().unwrap();
         assert_eq!(indicator.risk_score, Some(95));
+    }
+
+    #[test]
+    fn latest_enrichment_results_are_batched_by_indicator() {
+        let db = memory_db();
+        db.init_schema().unwrap();
+        let provider_id = db
+            .create_enrichment_provider(&EnrichmentProviderCreate {
+                name: "cisa-kev".into(),
+                provider_type: "cisa_kev".into(),
+                enabled: true,
+                config_json: None,
+                secret_ref: None,
+                rate_limit_per_minute: Some(60),
+                supports_types: vec![IndicatorType::Cve],
+            })
+            .unwrap();
+        let indicator_ids: Vec<i64> = ["CVE-2025-11111", "CVE-2025-22222", "CVE-2025-33333"]
+            .iter()
+            .map(|value| {
+                db.upsert_indicator(&sentinel_ioc::ExtractedIndicator {
+                    indicator_type: IndicatorType::Cve,
+                    value: (*value).into(),
+                    normalized_value: (*value).into(),
+                    source_field: "body".into(),
+                    start_offset: 0,
+                    end_offset: value.len(),
+                    surrounding_text: (*value).into(),
+                    confidence_hint: Some(90),
+                })
+                .unwrap()
+            })
+            .collect();
+
+        for (index, score) in [(0, 80), (1, 95)] {
+            db.store_enrichment_result(
+                indicator_ids[index],
+                provider_id,
+                &sentinel_enrichment::EnrichmentResult {
+                    provider_name: "cisa-kev".into(),
+                    indicator_type: IndicatorType::Cve,
+                    normalized_value: "x".into(),
+                    reputation: sentinel_enrichment::Reputation::Malicious,
+                    score: Some(score),
+                    verdict: None,
+                    summary: None,
+                    raw_json: serde_json::json!({}),
+                    expires_at: None,
+                },
+            )
+            .unwrap();
+        }
+
+        assert!(db
+            .get_latest_enrichment_results_for_indicators(&[])
+            .unwrap()
+            .is_empty());
+        let batched = db
+            .get_latest_enrichment_results_for_indicators(&indicator_ids)
+            .unwrap();
+        assert_eq!(batched.len(), 2);
+        assert_eq!(batched[&indicator_ids[0]][0].score, Some(80));
+        assert_eq!(batched[&indicator_ids[1]][0].score, Some(95));
+        assert_eq!(batched[&indicator_ids[1]][0].indicator_id, indicator_ids[1]);
+        assert!(!batched.contains_key(&indicator_ids[2]));
     }
 
     #[test]

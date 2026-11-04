@@ -11,6 +11,7 @@ use crate::db::{
 use crate::theme::{get_runtime_theme, Theme};
 use crate::types::*;
 use crate::ui;
+use crate::ui::alerts::state::{AlertContextTab, AlertPane, AlertWorkbenchState};
 use crate::ui::command_palette::{AppAction, CommandAction, CommandId, CommandPalette, ModalKind};
 use std::sync::mpsc;
 
@@ -73,6 +74,10 @@ pub struct App {
     pub triage_enum_selected: usize,
     pub triage_note_input_mode: bool,
     pub triage_note_input: String,
+
+    // Alert Workbench
+    pub workbench_state: AlertWorkbenchState,
+    pub workbench_bundle: Option<AlertWorkbenchBundle>,
     pub triage_input_target: crate::types::TriageInputTarget,
 
     // Articles
@@ -193,6 +198,8 @@ impl App {
             triage_enum_selected: 0,
             triage_note_input_mode: false,
             triage_note_input: String::new(),
+            workbench_state: AlertWorkbenchState::default(),
+            workbench_bundle: None,
             triage_input_target: crate::types::TriageInputTarget::default(),
             articles_list: Vec::new(),
             articles_selected: 0,
@@ -427,9 +434,13 @@ impl App {
             KeyCode::Char('0') => self.switch_screen(Screen::Settings),
             KeyCode::Char('?') | KeyCode::F(1) => self.show_help = true,
             KeyCode::Char('/') => self.start_filter(),
-            KeyCode::Char(':') => self.command_palette.state.open_colon(),
+            KeyCode::Char(':') => {
+                let context = self.command_context();
+                self.command_palette.state.open_colon(&context);
+            }
             KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.command_palette.state.open_fuzzy();
+                let context = self.command_context();
+                self.command_palette.state.open_fuzzy(&context);
             }
             KeyCode::Esc => self.handle_esc(),
             _ => self.handle_screen_key(key),
@@ -449,10 +460,10 @@ impl App {
                     self.execute_command(cmd_id, action);
                 }
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 self.command_palette.state.move_up();
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down => {
                 self.command_palette.state.move_down();
             }
             KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -471,6 +482,23 @@ impl App {
                 self.command_palette.state.input_char(c);
             }
             _ => {}
+        }
+    }
+
+    fn command_context(&self) -> ui::command_palette::registry::CommandContext {
+        let has_channel = |channel| {
+            self.settings_notifications
+                .iter()
+                .any(|notification| notification.enabled && notification.channel == channel)
+        };
+        ui::command_palette::registry::CommandContext {
+            current_screen: self.screen,
+            has_selected_feed: self.feeds_list.get(self.feeds_selected).is_some(),
+            has_selected_alert: self.workbench_state.selected_alert_id().is_some(),
+            has_selected_keyword: self.keywords_list.get(self.keywords_selected).is_some(),
+            discord_configured: has_channel(NotificationChannel::Discord),
+            webhook_configured: has_channel(NotificationChannel::Webhook),
+            email_configured: has_channel(NotificationChannel::Email),
         }
     }
 
@@ -667,49 +695,7 @@ impl App {
                 );
             }
             AppAction::AlertExportSelectedMarkdown => {
-                if let Some(alert) = self.alerts_list.get(self.alerts_selected) {
-                    let report_service = crate::report::ReportService::new();
-                    let options = threatdeck_report::ReportExportOptions {
-                        report_type: threatdeck_report::ReportType::Alert,
-                        format: threatdeck_report::ExportFormat::Markdown,
-                        output_path: None,
-                        include_raw_content: false,
-                        include_metadata: true,
-                        include_iocs: true,
-                        include_enrichment: true,
-                        include_triage_history: true,
-                        include_feed_health: false,
-                        include_tags: true,
-                        redact_secrets: true,
-                        overwrite: false,
-                        generated_by: None,
-                    };
-                    let export_dir = self.paths.data_dir.join("exports");
-                    match report_service.export_alert_report(
-                        &self.db,
-                        alert.alert.id,
-                        &options,
-                        &export_dir,
-                    ) {
-                        Ok(result) => {
-                            self.set_notification(
-                                format!("Exported: {}", result.path.display()),
-                                crate::types::NotificationType::Success,
-                            );
-                        }
-                        Err(e) => {
-                            self.set_notification(
-                                format!("Export failed: {}", e),
-                                crate::types::NotificationType::Error,
-                            );
-                        }
-                    }
-                } else {
-                    self.set_notification(
-                        "No alert selected".to_string(),
-                        crate::types::NotificationType::Warning,
-                    );
-                }
+                self.export_selected_alert_markdown();
             }
             AppAction::AlertExportVisibleMarkdown => {
                 let report_service = crate::report::ReportService::new();
@@ -886,6 +872,22 @@ impl App {
                     crate::types::NotificationType::Warning,
                 );
             }
+            AppAction::AlertFocusList => self.focus_alert_pane(AlertPane::List),
+            AppAction::AlertFocusDetails => self.focus_alert_pane(AlertPane::Details),
+            AppAction::AlertFocusContext => self.focus_alert_pane(AlertPane::Context),
+            AppAction::AlertContextIocs => {
+                self.set_alert_context_tab(AlertContextTab::Iocs);
+            }
+            AppAction::AlertContextMetadata => {
+                self.set_alert_context_tab(AlertContextTab::Metadata);
+            }
+            AppAction::AlertContextHistory => {
+                self.set_alert_context_tab(AlertContextTab::TriageHistory);
+            }
+            AppAction::AlertTriageAcknowledge => self.triage_acknowledge(),
+            AppAction::AlertTriageInvestigate => self.triage_investigate(),
+            AppAction::AlertTriageEscalate => self.triage_escalate(),
+            AppAction::AlertTriageClose => self.triage_close(),
         }
     }
 
@@ -1289,6 +1291,226 @@ impl App {
         if self.alerts_selected >= self.alerts_list.len() && !self.alerts_list.is_empty() {
             self.alerts_selected = self.alerts_list.len() - 1;
         }
+        self.refresh_workbench();
+    }
+
+    pub fn refresh_workbench(&mut self) {
+        let prev_id = self.workbench_state.selected_alert_id();
+        let items: Vec<AlertListItem> = self.alerts_list.iter().map(AlertListItem::from).collect();
+        self.workbench_state.set_alerts(items);
+        // Preserve selection by alert ID when possible
+        if let Some(id) = prev_id {
+            if let Some(idx) = self.workbench_state.alerts.iter().position(|a| a.id == id) {
+                self.workbench_state.selected_alert_index = idx;
+            }
+        }
+        self.alerts_selected = self.workbench_state.selected_alert_index;
+        self.workbench_bundle = self
+            .workbench_state
+            .selected_alert_id()
+            .and_then(|id| self.get_alert_workbench_bundle(id));
+    }
+
+    /// Reload only the workbench bundle for the current selection,
+    /// without re-syncing the alert list. Called after selection changes.
+    pub fn refresh_workbench_bundle(&mut self) {
+        self.alerts_selected = self.workbench_state.selected_alert_index;
+        self.workbench_bundle = self
+            .workbench_state
+            .selected_alert_id()
+            .and_then(|id| self.get_alert_workbench_bundle(id));
+    }
+
+    /// Export the selected alert as a Markdown report.
+    pub fn export_selected_alert_markdown(&mut self) {
+        let Some(alert) = self.alerts_list.get(self.alerts_selected) else {
+            self.set_notification(
+                "No alert selected".to_string(),
+                crate::types::NotificationType::Warning,
+            );
+            return;
+        };
+        let alert_id = alert.alert.id;
+        let report_service = crate::report::ReportService::new();
+        let options = threatdeck_report::ReportExportOptions {
+            report_type: threatdeck_report::ReportType::Alert,
+            format: threatdeck_report::ExportFormat::Markdown,
+            output_path: None,
+            include_raw_content: false,
+            include_metadata: true,
+            include_iocs: true,
+            include_enrichment: true,
+            include_triage_history: true,
+            include_feed_health: false,
+            include_tags: true,
+            redact_secrets: true,
+            overwrite: false,
+            generated_by: None,
+        };
+        let export_dir = self.paths.data_dir.join("exports");
+        match report_service.export_alert_report(&self.db, alert_id, &options, &export_dir) {
+            Ok(result) => {
+                self.set_notification(
+                    format!("Exported: {}", result.path.display()),
+                    crate::types::NotificationType::Success,
+                );
+            }
+            Err(e) => {
+                self.set_notification(
+                    format!("Export failed: {}", e),
+                    crate::types::NotificationType::Error,
+                );
+            }
+        }
+    }
+
+    /// Queue enrichment for a single indicator. Checks the enrichment config.
+    pub fn enrich_indicator(&mut self, indicator_id: i64, label: &str) {
+        if !self.config.enrichment.enabled {
+            self.set_notification(
+                "Enrichment is disabled in settings".to_string(),
+                crate::types::NotificationType::Warning,
+            );
+            return;
+        }
+        match self
+            .db
+            .queue_enrichment_jobs_for_indicators(&[indicator_id])
+        {
+            Ok(job_ids) if job_ids.is_empty() => {
+                self.set_notification(
+                    format!("No enrichment jobs queued for {}", label),
+                    crate::types::NotificationType::Info,
+                );
+            }
+            Ok(job_ids) => {
+                self.refresh_enrichment_queue();
+                self.set_notification(
+                    format!("Queued {} enrichment job(s) for {}", job_ids.len(), label),
+                    crate::types::NotificationType::Success,
+                );
+            }
+            Err(e) => {
+                self.set_notification(
+                    format!("Unable to queue enrichment: {}", e),
+                    crate::types::NotificationType::Error,
+                );
+            }
+        }
+    }
+
+    // ── Shared triage actions ───────────────────────────────────────────────
+    // Called from both keyboard handler (events.rs) and command palette.
+
+    /// Acknowledge the selected alert.
+    pub fn triage_acknowledge(&mut self) {
+        self.triage_set_status(
+            AlertStatus::Acknowledged,
+            "Alert acknowledged",
+            NotificationType::Success,
+        );
+    }
+
+    /// Start investigating the selected alert.
+    pub fn triage_investigate(&mut self) {
+        self.triage_set_status(
+            AlertStatus::Investigating,
+            "Investigation started",
+            NotificationType::Success,
+        );
+    }
+
+    /// Escalate the selected alert.
+    pub fn triage_escalate(&mut self) {
+        self.triage_set_status(
+            AlertStatus::Escalated,
+            "Alert escalated",
+            NotificationType::Warning,
+        );
+    }
+
+    /// Close the selected alert (requires a disposition).
+    pub fn triage_close(&mut self) {
+        self.alerts_selected = self.workbench_state.selected_alert_index;
+        let Some(a) = self.alerts_list.get(self.alerts_selected) else {
+            self.set_notification("No alert selected".into(), NotificationType::Warning);
+            return;
+        };
+        if !a.alert.can_close() {
+            self.set_notification(
+                "Select disposition before closing (T)".into(),
+                NotificationType::Warning,
+            );
+            return;
+        }
+        let result = self
+            .db
+            .close_alert(a.alert.id, a.alert.disposition, None)
+            .and_then(|()| self.db.mark_alert_read(a.alert.id, true));
+        self.finish_triage_mutation(result, "Alert closed".into(), NotificationType::Success);
+    }
+
+    /// Reopen the selected alert.
+    pub fn triage_reopen(&mut self) {
+        self.alerts_selected = self.workbench_state.selected_alert_index;
+        let Some(a) = self.alerts_list.get(self.alerts_selected) else {
+            self.set_notification("No alert selected".into(), NotificationType::Warning);
+            return;
+        };
+        if a.alert.status != AlertStatus::Closed {
+            self.set_notification("Alert is not closed".into(), NotificationType::Warning);
+            return;
+        }
+        let result = self.db.reopen_alert(a.alert.id, None);
+        self.finish_triage_mutation(result, "Alert reopened".into(), NotificationType::Success);
+    }
+
+    /// Focus a specific alert workbench pane. Navigates to Alerts first if needed.
+    pub fn focus_alert_pane(&mut self, pane: AlertPane) {
+        if self.screen != Screen::Alerts {
+            self.switch_screen(Screen::Alerts);
+        }
+        self.workbench_state.focused_pane = pane;
+    }
+
+    /// Switch the context panel tab. Navigates to Alerts first if needed.
+    pub fn set_alert_context_tab(&mut self, tab: AlertContextTab) {
+        if self.screen != Screen::Alerts {
+            self.switch_screen(Screen::Alerts);
+        }
+        self.workbench_state.active_context_tab = tab;
+        self.workbench_state.context_scroll = 0;
+    }
+
+    /// Private helper: update alert status, mark read, refresh, notify.
+    fn triage_set_status(&mut self, status: AlertStatus, msg: &str, ntype: NotificationType) {
+        self.alerts_selected = self.workbench_state.selected_alert_index;
+        let Some(a) = self.alerts_list.get(self.alerts_selected) else {
+            self.set_notification("No alert selected".into(), NotificationType::Warning);
+            return;
+        };
+        let result = self
+            .db
+            .update_alert_status(a.alert.id, status, None)
+            .and_then(|()| self.db.mark_alert_read(a.alert.id, true));
+        self.finish_triage_mutation(result, msg.into(), ntype);
+    }
+
+    /// Refresh triage views and report the storage result honestly.
+    pub(crate) fn finish_triage_mutation(
+        &mut self,
+        result: anyhow::Result<()>,
+        success_message: String,
+        success_type: NotificationType,
+    ) {
+        self.refresh_alerts();
+        match result {
+            Ok(()) => self.set_notification(success_message, success_type),
+            Err(error) => self.set_notification(
+                format!("Alert update failed: {error}"),
+                NotificationType::Error,
+            ),
+        }
     }
 
     pub fn refresh_articles(&mut self) {
@@ -1585,5 +1807,519 @@ impl App {
         if self.settings_auto_fetch_enabled {
             self.start_auto_fetch();
         }
+    }
+
+    pub fn get_alert_workbench_bundle(&self, alert_id: i64) -> Option<AlertWorkbenchBundle> {
+        let data = self.db.get_alert_report_data(alert_id).ok()??;
+
+        let detail = AlertDetailViewModel {
+            id: data.alert.id,
+            title: data.alert.title.clone().unwrap_or_default(),
+            content_snippet: data.alert.content_snippet.clone(),
+            criticality: data.alert.criticality,
+            effective_severity: data.alert.effective_severity(),
+            status: data.alert.status,
+            disposition: data.alert.disposition,
+            read: data.alert.read,
+            confidence_score: data.alert.confidence_score,
+            owner: data.alert.owner.clone(),
+            triage_notes: data.alert.triage_notes.clone(),
+            detected_at: data.alert.detected_at,
+            feed_name: data.feed_name.clone(),
+            keyword_pattern: data.keyword_pattern.clone(),
+            tags: data.tags.clone(),
+            metadata_json: data.alert.metadata_json.clone(),
+            acknowledged_at: data.alert.acknowledged_at,
+            investigating_at: data.alert.investigating_at,
+            escalated_at: data.alert.escalated_at,
+            closed_at: data.alert.closed_at,
+            closed_reason: data.alert.closed_reason.clone(),
+        };
+
+        let indicator_ids: Vec<i64> = data.indicators.iter().map(|ind| ind.id).collect();
+        let enrichment_by_indicator = self
+            .db
+            .get_latest_enrichment_results_for_indicators(&indicator_ids)
+            .ok()?;
+        let indicators = data
+            .indicators
+            .iter()
+            .map(|ind| {
+                let enrichments = enrichment_by_indicator
+                    .get(&ind.id)
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[])
+                    .iter()
+                    .map(|er| EnrichmentViewModel {
+                        provider_id: er.provider_id,
+                        status: er.status.clone(),
+                        reputation: er.reputation.clone(),
+                        score: er.score,
+                        verdict: er.verdict.clone(),
+                        summary: er.summary.clone(),
+                        fetched_at: er.fetched_at,
+                    })
+                    .collect();
+                IndicatorViewModel {
+                    id: ind.id,
+                    indicator_type: format!("{:?}", ind.indicator_type),
+                    value: ind.value.clone(),
+                    normalized_value: ind.normalized_value.clone(),
+                    sighting_count: ind.sighting_count,
+                    confidence_score: ind.confidence_score,
+                    risk_score: ind.risk_score,
+                    first_seen_at: ind.first_seen_at,
+                    last_seen_at: ind.last_seen_at,
+                    enrichments,
+                }
+            })
+            .collect();
+
+        let triage_events = data
+            .triage_history
+            .iter()
+            .map(|ev| TriageEventViewModel {
+                id: ev.id,
+                event_type: ev.event_type.clone(),
+                old_value: ev.old_value.clone(),
+                new_value: ev.new_value.clone(),
+                note: ev.note.clone(),
+                actor: ev.actor.clone().unwrap_or_default(),
+                created_at: ev.created_at,
+            })
+            .collect();
+
+        Some(AlertWorkbenchBundle {
+            detail,
+            indicators,
+            triage_events,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::App;
+    use crate::config::{AppConfig, Paths};
+    use crate::db::{AlertCreate, Db, FeedCreate, KeywordCreate};
+    use crate::types::{AlertStatus, Criticality, FeedType, NotificationType, Screen};
+    use crate::ui::alerts::state::{AlertContextTab, AlertPane};
+    use crate::ui::command_palette::{AppAction, CommandId};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use std::path::PathBuf;
+
+    fn temp_db_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("threatdeck-app-{}-{}.db", name, std::process::id()))
+    }
+
+    fn setup_app(name: &str) -> (App, i64, i64) {
+        let path = temp_db_path(name);
+        let _ = std::fs::remove_file(&path);
+        let db = Db::open(&path).unwrap();
+        db.init_schema().unwrap();
+        let feed_id = db
+            .create_feed(&FeedCreate {
+                name: "Test".into(),
+                url: "https://example.com/feed.xml".into(),
+                feed_type: FeedType::Rss,
+                enabled: true,
+                interval_secs: 300,
+                ..FeedCreate::default()
+            })
+            .unwrap();
+        let keyword_id = db
+            .create_keyword(&KeywordCreate {
+                pattern: "breach".into(),
+                criticality: Criticality::High,
+                enabled: true,
+                ..KeywordCreate::default()
+            })
+            .unwrap();
+        let paths = Paths {
+            config_dir: PathBuf::new(),
+            data_dir: PathBuf::new(),
+            config_file: PathBuf::new(),
+            db_file: path,
+        };
+        let app = App::new(db, AppConfig::default(), paths);
+        (app, feed_id, keyword_id)
+    }
+
+    #[test]
+    fn test_bundle_loads_selected_alert() {
+        let (app, feed_id, keyword_id) = setup_app("bundle_loads");
+        let alert_id = app
+            .db
+            .create_alert(&AlertCreate {
+                feed_id,
+                keyword_id,
+                title: Some("Test Alert".into()),
+                content_snippet: "test content".into(),
+                criticality: Criticality::High,
+                content_hash: "hash".into(),
+                metadata_json: Some(r#"{"key":"value"}"#.into()),
+            })
+            .unwrap();
+        let bundle = app.get_alert_workbench_bundle(alert_id);
+        assert!(bundle.is_some());
+        let bundle = bundle.unwrap();
+        assert_eq!(bundle.detail.id, alert_id);
+        assert_eq!(bundle.detail.title, "Test Alert");
+        assert_eq!(bundle.detail.feed_name, "Test");
+        assert!(bundle.detail.metadata_json.is_some());
+        let _ = std::fs::remove_file(&app.paths.db_file);
+    }
+
+    #[test]
+    fn test_bundle_returns_none_for_missing_alert() {
+        let (app, _feed_id, _keyword_id) = setup_app("bundle_missing");
+        assert!(app.get_alert_workbench_bundle(99999).is_none());
+        let _ = std::fs::remove_file(&app.paths.db_file);
+    }
+
+    #[test]
+    fn test_bundle_empty_indicators_when_none_exist() {
+        let (app, feed_id, keyword_id) = setup_app("bundle_empty_iocs");
+        let alert_id = app
+            .db
+            .create_alert(&AlertCreate {
+                feed_id,
+                keyword_id,
+                title: Some("Test Alert".into()),
+                content_snippet: "test content".into(),
+                criticality: Criticality::High,
+                content_hash: "hash".into(),
+                metadata_json: None,
+            })
+            .unwrap();
+        let bundle = app.get_alert_workbench_bundle(alert_id).unwrap();
+        assert!(bundle.indicators.is_empty());
+        let _ = std::fs::remove_file(&app.paths.db_file);
+    }
+
+    #[test]
+    fn test_bundle_returns_indicators() {
+        let (app, feed_id, keyword_id) = setup_app("bundle_iocs");
+        let alert_id = app
+            .db
+            .create_alert(&AlertCreate {
+                feed_id,
+                keyword_id,
+                title: Some("Test Alert".into()),
+                content_snippet: "test content".into(),
+                criticality: Criticality::High,
+                content_hash: "hash".into(),
+                metadata_json: None,
+            })
+            .unwrap();
+        app.db
+            .store_extracted_indicators(
+                &[sentinel_ioc::ExtractedIndicator {
+                    indicator_type: sentinel_ioc::IndicatorType::Cve,
+                    value: "CVE-2025-12345".into(),
+                    normalized_value: "CVE-2025-12345".into(),
+                    source_field: "content_snippet".into(),
+                    start_offset: 0,
+                    end_offset: 14,
+                    surrounding_text: "CVE-2025-12345".into(),
+                    confidence_hint: Some(90),
+                }],
+                Some(alert_id),
+                None,
+                Some(feed_id),
+            )
+            .unwrap();
+        let bundle = app.get_alert_workbench_bundle(alert_id).unwrap();
+        assert_eq!(bundle.indicators.len(), 1);
+        assert_eq!(bundle.indicators[0].value, "CVE-2025-12345");
+        assert!(bundle.indicators[0].enrichments.is_empty());
+        let _ = std::fs::remove_file(&app.paths.db_file);
+    }
+
+    #[test]
+    fn test_bundle_returns_triage_history() {
+        let (app, feed_id, keyword_id) = setup_app("bundle_triage");
+        let alert_id = app
+            .db
+            .create_alert(&AlertCreate {
+                feed_id,
+                keyword_id,
+                title: Some("Test Alert".into()),
+                content_snippet: "test content".into(),
+                criticality: Criticality::High,
+                content_hash: "hash".into(),
+                metadata_json: None,
+            })
+            .unwrap();
+        app.db
+            .update_alert_status(alert_id, AlertStatus::Acknowledged, Some("acknowledging"))
+            .unwrap();
+        let bundle = app.get_alert_workbench_bundle(alert_id).unwrap();
+        assert_eq!(bundle.triage_events.len(), 1);
+        assert_eq!(bundle.triage_events[0].event_type, "status_changed");
+        let _ = std::fs::remove_file(&app.paths.db_file);
+    }
+
+    #[test]
+    fn test_bundle_empty_enrichment_when_none_exist() {
+        let (app, feed_id, keyword_id) = setup_app("bundle_empty_enrich");
+        let alert_id = app
+            .db
+            .create_alert(&AlertCreate {
+                feed_id,
+                keyword_id,
+                title: Some("Test Alert".into()),
+                content_snippet: "test content".into(),
+                criticality: Criticality::High,
+                content_hash: "hash".into(),
+                metadata_json: None,
+            })
+            .unwrap();
+        app.db
+            .store_extracted_indicators(
+                &[sentinel_ioc::ExtractedIndicator {
+                    indicator_type: sentinel_ioc::IndicatorType::Cve,
+                    value: "CVE-2025-12345".into(),
+                    normalized_value: "CVE-2025-12345".into(),
+                    source_field: "content_snippet".into(),
+                    start_offset: 0,
+                    end_offset: 14,
+                    surrounding_text: "CVE-2025-12345".into(),
+                    confidence_hint: Some(90),
+                }],
+                Some(alert_id),
+                None,
+                Some(feed_id),
+            )
+            .unwrap();
+        let bundle = app.get_alert_workbench_bundle(alert_id).unwrap();
+        assert!(!bundle.indicators.is_empty());
+        assert!(bundle.indicators[0].enrichments.is_empty());
+        let _ = std::fs::remove_file(&app.paths.db_file);
+    }
+
+    // ── Phase 5: Command palette dispatch tests ───────────────────────────────
+
+    #[test]
+    fn palette_focus_list_pane() {
+        let (mut app, _, _) = setup_app("pal_focus_list");
+        app.screen = Screen::Alerts;
+        app.workbench_state.focused_pane = AlertPane::Details;
+        app.handle_app_action(AppAction::AlertFocusList);
+        assert_eq!(app.workbench_state.focused_pane, AlertPane::List);
+        let _ = std::fs::remove_file(&app.paths.db_file);
+    }
+
+    #[test]
+    fn palette_focus_details_pane() {
+        let (mut app, _, _) = setup_app("pal_focus_details");
+        app.screen = Screen::Alerts;
+        app.handle_app_action(AppAction::AlertFocusDetails);
+        assert_eq!(app.workbench_state.focused_pane, AlertPane::Details);
+        let _ = std::fs::remove_file(&app.paths.db_file);
+    }
+
+    #[test]
+    fn palette_focus_context_pane() {
+        let (mut app, _, _) = setup_app("pal_focus_ctx");
+        app.screen = Screen::Alerts;
+        app.handle_app_action(AppAction::AlertFocusContext);
+        assert_eq!(app.workbench_state.focused_pane, AlertPane::Context);
+        let _ = std::fs::remove_file(&app.paths.db_file);
+    }
+
+    #[test]
+    fn palette_switch_context_tab_iocs() {
+        let (mut app, _, _) = setup_app("pal_tab_iocs");
+        app.screen = Screen::Alerts;
+        app.workbench_state.active_context_tab = AlertContextTab::Metadata;
+        app.handle_app_action(AppAction::AlertContextIocs);
+        assert_eq!(
+            app.workbench_state.active_context_tab,
+            AlertContextTab::Iocs
+        );
+        let _ = std::fs::remove_file(&app.paths.db_file);
+    }
+
+    #[test]
+    fn palette_switch_context_tab_metadata() {
+        let (mut app, _, _) = setup_app("pal_tab_meta");
+        app.screen = Screen::Alerts;
+        app.handle_app_action(AppAction::AlertContextMetadata);
+        assert_eq!(
+            app.workbench_state.active_context_tab,
+            AlertContextTab::Metadata
+        );
+        let _ = std::fs::remove_file(&app.paths.db_file);
+    }
+
+    #[test]
+    fn palette_switch_context_tab_history() {
+        let (mut app, _, _) = setup_app("pal_tab_hist");
+        app.screen = Screen::Alerts;
+        app.handle_app_action(AppAction::AlertContextHistory);
+        assert_eq!(
+            app.workbench_state.active_context_tab,
+            AlertContextTab::TriageHistory
+        );
+        let _ = std::fs::remove_file(&app.paths.db_file);
+    }
+
+    #[test]
+    fn palette_triage_acknowledge_selected_alert() {
+        let (mut app, feed_id, keyword_id) = setup_app("pal_ack");
+        let alert_id = app
+            .db
+            .create_alert(&AlertCreate {
+                feed_id,
+                keyword_id,
+                title: Some("Pal Ack Test".into()),
+                content_snippet: "content".into(),
+                criticality: Criticality::High,
+                content_hash: "pal-ack".into(),
+                metadata_json: None,
+            })
+            .unwrap();
+        app.refresh_alerts();
+        app.screen = Screen::Alerts;
+        // Find the created alert by ID and select it
+        let idx = app
+            .workbench_state
+            .alerts
+            .iter()
+            .position(|a| a.id == alert_id)
+            .expect("created alert should be in the list");
+        app.workbench_state.selected_alert_index = idx;
+        app.handle_app_action(AppAction::AlertTriageAcknowledge);
+        let (msg, ntype) = app.notification.as_ref().unwrap();
+        assert_eq!(*ntype, NotificationType::Success);
+        assert!(msg.contains("acknowledged"));
+        // Verify status changed in DB
+        let alert = app.db.get_alert(alert_id).unwrap().unwrap();
+        assert_eq!(alert.status, AlertStatus::Acknowledged);
+        let _ = std::fs::remove_file(&app.paths.db_file);
+    }
+
+    #[test]
+    fn palette_triage_acknowledge_no_alert_warns() {
+        let (mut app, _, _) = setup_app("pal_ack_none");
+        app.screen = Screen::Alerts;
+        app.workbench_state.selected_alert_index = 999;
+        app.alerts_selected = 999;
+        app.handle_app_action(AppAction::AlertTriageAcknowledge);
+        let (msg, ntype) = app.notification.as_ref().unwrap();
+        assert_eq!(*ntype, NotificationType::Warning);
+        assert!(msg.contains("No alert selected"));
+        let _ = std::fs::remove_file(&app.paths.db_file);
+    }
+
+    #[test]
+    fn triage_reopen_refuses_non_closed_alert() {
+        let (mut app, feed_id, keyword_id) = setup_app("reopen_open");
+        let alert_id = app
+            .db
+            .create_alert(&AlertCreate {
+                feed_id,
+                keyword_id,
+                title: Some("Still open".into()),
+                content_snippet: "content".into(),
+                criticality: Criticality::High,
+                content_hash: "reopen-open".into(),
+                metadata_json: None,
+            })
+            .unwrap();
+        app.refresh_alerts();
+        app.workbench_state.selected_alert_index = app
+            .workbench_state
+            .alerts
+            .iter()
+            .position(|a| a.id == alert_id)
+            .unwrap();
+
+        app.triage_reopen();
+
+        assert_eq!(
+            app.db.get_alert(alert_id).unwrap().unwrap().status,
+            AlertStatus::New
+        );
+        let (message, kind) = app.notification.as_ref().unwrap();
+        assert_eq!(*kind, NotificationType::Warning);
+        assert_eq!(message, "Alert is not closed");
+        let _ = std::fs::remove_file(&app.paths.db_file);
+    }
+
+    #[test]
+    fn triage_status_db_error_shows_error_notification() {
+        let (mut app, feed_id, keyword_id) = setup_app("triage_db_error");
+        let alert_id = app
+            .db
+            .create_alert(&AlertCreate {
+                feed_id,
+                keyword_id,
+                title: Some("Unwritable alert".into()),
+                content_snippet: "content".into(),
+                criticality: Criticality::High,
+                content_hash: "triage-db-error".into(),
+                metadata_json: None,
+            })
+            .unwrap();
+        app.refresh_alerts();
+        app.workbench_state.selected_alert_index = app
+            .workbench_state
+            .alerts
+            .iter()
+            .position(|a| a.id == alert_id)
+            .unwrap();
+        let connection = rusqlite::Connection::open(&app.paths.db_file).unwrap();
+        connection
+            .execute(
+                "CREATE TRIGGER reject_alert_update BEFORE UPDATE ON alerts
+                 BEGIN SELECT RAISE(FAIL, 'forced update failure'); END;",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+
+        app.triage_acknowledge();
+
+        assert_eq!(
+            app.db.get_alert(alert_id).unwrap().unwrap().status,
+            AlertStatus::New
+        );
+        let (message, kind) = app.notification.as_ref().unwrap();
+        assert_eq!(*kind, NotificationType::Error);
+        assert!(message.contains("forced update failure"));
+        let _ = std::fs::remove_file(&app.paths.db_file);
+    }
+
+    #[test]
+    fn palette_accepts_literal_markdown_command() {
+        let (mut app, _, _) = setup_app("palette_literal_markdown");
+        app.screen = Screen::Alerts;
+        let context = app.command_context();
+        app.command_palette.state.open_fuzzy(&context);
+        let query = "alert export selected markdown";
+
+        for character in query.chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
+        }
+
+        assert_eq!(app.command_palette.state.input, query);
+        assert!(app
+            .command_palette
+            .state
+            .results
+            .iter()
+            .any(|result| result.command.id == CommandId::AlertExportSelectedMarkdown));
+        let _ = std::fs::remove_file(&app.paths.db_file);
+    }
+
+    #[test]
+    fn palette_export_via_action() {
+        let (mut app, _, _) = setup_app("pal_export");
+        app.handle_app_action(AppAction::AlertExportSelectedMarkdown);
+        let (_, ntype) = app.notification.as_ref().unwrap();
+        assert_eq!(*ntype, NotificationType::Success);
+        let _ = std::fs::remove_file(&app.paths.db_file);
     }
 }

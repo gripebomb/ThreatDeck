@@ -73,7 +73,7 @@ impl AlertEngine {
                     feed.id,
                     m.keyword_id,
                     item.title.as_deref().unwrap_or(""),
-                    &content
+                    content
                 );
                 let mut hasher = Sha256::new();
                 hasher.update(hash_input.as_bytes());

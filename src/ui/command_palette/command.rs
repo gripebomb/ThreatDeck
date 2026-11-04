@@ -30,6 +30,16 @@ pub enum CommandId {
     AlertMarkVisibleRead,
     AlertExportSelectedMarkdown,
     AlertExportVisibleMarkdown,
+    AlertFocusList,
+    AlertFocusDetails,
+    AlertFocusContext,
+    AlertContextIocs,
+    AlertContextMetadata,
+    AlertContextHistory,
+    AlertTriageAcknowledge,
+    AlertTriageInvestigate,
+    AlertTriageEscalate,
+    AlertTriageClose,
     FeedHealthExportMarkdown,
 
     KeywordAdd,
@@ -81,6 +91,8 @@ pub enum CommandAvailability {
     WhenAlertSelected,
     WhenKeywordSelected,
     WhenNotificationRouteConfigured(NotificationRouteKind),
+    WhenScreen(Screen),
+    WhenScreenAlertSelected(Screen),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,6 +134,16 @@ pub enum AppAction {
     AlertMarkVisibleRead,
     AlertExportSelectedMarkdown,
     AlertExportVisibleMarkdown,
+    AlertFocusList,
+    AlertFocusDetails,
+    AlertFocusContext,
+    AlertContextIocs,
+    AlertContextMetadata,
+    AlertContextHistory,
+    AlertTriageAcknowledge,
+    AlertTriageInvestigate,
+    AlertTriageEscalate,
+    AlertTriageClose,
     FeedHealthExportMarkdown,
 
     KeywordAdd,

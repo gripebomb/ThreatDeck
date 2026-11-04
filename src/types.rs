@@ -644,3 +644,102 @@ pub enum TriageInputTarget {
     Note,
     Owner,
 }
+
+// ── Alert Workbench View Models ─────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct AlertListItem {
+    pub id: i64,
+    pub title: String,
+    pub criticality: Criticality,
+    pub status: AlertStatus,
+    pub disposition: AlertDisposition,
+    pub read: bool,
+    pub detected_at: DateTime<Utc>,
+    pub feed_name: String,
+    pub keyword_pattern: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct AlertDetailViewModel {
+    pub id: i64,
+    pub title: String,
+    pub content_snippet: String,
+    pub criticality: Criticality,
+    pub effective_severity: Criticality,
+    pub status: AlertStatus,
+    pub disposition: AlertDisposition,
+    pub read: bool,
+    pub confidence_score: Option<i64>,
+    pub owner: Option<String>,
+    pub triage_notes: Option<String>,
+    pub detected_at: DateTime<Utc>,
+    pub feed_name: String,
+    pub keyword_pattern: String,
+    pub tags: Vec<Tag>,
+    pub metadata_json: Option<String>,
+    pub acknowledged_at: Option<DateTime<Utc>>,
+    pub investigating_at: Option<DateTime<Utc>>,
+    pub escalated_at: Option<DateTime<Utc>>,
+    pub closed_at: Option<DateTime<Utc>>,
+    pub closed_reason: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct EnrichmentViewModel {
+    pub provider_id: i64,
+    pub status: String,
+    pub reputation: Option<String>,
+    pub score: Option<i64>,
+    pub verdict: Option<String>,
+    pub summary: Option<String>,
+    pub fetched_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IndicatorViewModel {
+    pub id: i64,
+    pub indicator_type: String,
+    pub value: String,
+    pub normalized_value: String,
+    pub sighting_count: i64,
+    pub confidence_score: Option<i64>,
+    pub risk_score: Option<i64>,
+    pub first_seen_at: DateTime<Utc>,
+    pub last_seen_at: DateTime<Utc>,
+    pub enrichments: Vec<EnrichmentViewModel>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TriageEventViewModel {
+    pub id: i64,
+    pub event_type: String,
+    pub old_value: Option<String>,
+    pub new_value: Option<String>,
+    pub note: Option<String>,
+    pub actor: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AlertWorkbenchBundle {
+    pub detail: AlertDetailViewModel,
+    pub indicators: Vec<IndicatorViewModel>,
+    pub triage_events: Vec<TriageEventViewModel>,
+}
+
+impl From<&AlertWithMeta> for AlertListItem {
+    fn from(item: &AlertWithMeta) -> Self {
+        Self {
+            id: item.alert.id,
+            title: item.alert.title.clone().unwrap_or_default(),
+            criticality: item.alert.criticality,
+            status: item.alert.status,
+            disposition: item.alert.disposition,
+            read: item.alert.read,
+            detected_at: item.alert.detected_at,
+            feed_name: item.feed_name.clone(),
+            keyword_pattern: item.keyword_pattern.clone(),
+        }
+    }
+}

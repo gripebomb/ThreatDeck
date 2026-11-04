@@ -68,6 +68,8 @@ pub enum EnrichmentError {
     Provider(String),
 }
 
+// async_trait marks its boxed future must_use; the returned Result already is.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait EnrichmentProvider: Send + Sync {
     fn name(&self) -> &str;
