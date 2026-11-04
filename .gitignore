@@ -24,7 +24,7 @@
 
 # Test artifacts
 *.profraw
-
+WATCHDOG.yml
 # Planning Docs
 
 docs/
@@ -34,3 +34,5 @@ tickets/
 # Understand Anything
 .understand-anything/intermediate/
 .understand-anything/diff-overlay.json
+
+exports/
