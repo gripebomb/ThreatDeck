@@ -460,10 +460,10 @@ impl App {
                     self.execute_command(cmd_id, action);
                 }
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 self.command_palette.state.move_up();
             }
-            KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Down => {
                 self.command_palette.state.move_down();
             }
             KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -1904,7 +1904,8 @@ mod tests {
     use crate::db::{AlertCreate, Db, FeedCreate, KeywordCreate};
     use crate::types::{AlertStatus, Criticality, FeedType, NotificationType, Screen};
     use crate::ui::alerts::state::{AlertContextTab, AlertPane};
-    use crate::ui::command_palette::AppAction;
+    use crate::ui::command_palette::{AppAction, CommandId};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use std::path::PathBuf;
 
     fn temp_db_path(name: &str) -> PathBuf {
@@ -2288,6 +2289,28 @@ mod tests {
         let (message, kind) = app.notification.as_ref().unwrap();
         assert_eq!(*kind, NotificationType::Error);
         assert!(message.contains("forced update failure"));
+        let _ = std::fs::remove_file(&app.paths.db_file);
+    }
+
+    #[test]
+    fn palette_accepts_literal_markdown_command() {
+        let (mut app, _, _) = setup_app("palette_literal_markdown");
+        app.screen = Screen::Alerts;
+        let context = app.command_context();
+        app.command_palette.state.open_fuzzy(&context);
+        let query = "alert export selected markdown";
+
+        for character in query.chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE));
+        }
+
+        assert_eq!(app.command_palette.state.input, query);
+        assert!(app
+            .command_palette
+            .state
+            .results
+            .iter()
+            .any(|result| result.command.id == CommandId::AlertExportSelectedMarkdown));
         let _ = std::fs::remove_file(&app.paths.db_file);
     }
 
