@@ -434,9 +434,13 @@ impl App {
             KeyCode::Char('0') => self.switch_screen(Screen::Settings),
             KeyCode::Char('?') | KeyCode::F(1) => self.show_help = true,
             KeyCode::Char('/') => self.start_filter(),
-            KeyCode::Char(':') => self.command_palette.state.open_colon(),
+            KeyCode::Char(':') => {
+                let context = self.command_context();
+                self.command_palette.state.open_colon(&context);
+            }
             KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.command_palette.state.open_fuzzy();
+                let context = self.command_context();
+                self.command_palette.state.open_fuzzy(&context);
             }
             KeyCode::Esc => self.handle_esc(),
             _ => self.handle_screen_key(key),
@@ -478,6 +482,23 @@ impl App {
                 self.command_palette.state.input_char(c);
             }
             _ => {}
+        }
+    }
+
+    fn command_context(&self) -> ui::command_palette::registry::CommandContext {
+        let has_channel = |channel| {
+            self.settings_notifications
+                .iter()
+                .any(|notification| notification.enabled && notification.channel == channel)
+        };
+        ui::command_palette::registry::CommandContext {
+            current_screen: self.screen,
+            has_selected_feed: self.feeds_list.get(self.feeds_selected).is_some(),
+            has_selected_alert: self.workbench_state.selected_alert_id().is_some(),
+            has_selected_keyword: self.keywords_list.get(self.keywords_selected).is_some(),
+            discord_configured: has_channel(NotificationChannel::Discord),
+            webhook_configured: has_channel(NotificationChannel::Webhook),
+            email_configured: has_channel(NotificationChannel::Email),
         }
     }
 
@@ -1422,10 +1443,11 @@ impl App {
             );
             return;
         }
-        let _ = self.db.close_alert(a.alert.id, a.alert.disposition, None);
-        let _ = self.db.mark_alert_read(a.alert.id, true);
-        self.refresh_alerts();
-        self.set_notification("Alert closed".into(), NotificationType::Success);
+        let result = self
+            .db
+            .close_alert(a.alert.id, a.alert.disposition, None)
+            .and_then(|()| self.db.mark_alert_read(a.alert.id, true));
+        self.finish_triage_mutation(result, "Alert closed".into(), NotificationType::Success);
     }
 
     /// Reopen the selected alert.
@@ -1435,9 +1457,12 @@ impl App {
             self.set_notification("No alert selected".into(), NotificationType::Warning);
             return;
         };
-        let _ = self.db.reopen_alert(a.alert.id, None);
-        self.refresh_alerts();
-        self.set_notification("Alert reopened".into(), NotificationType::Success);
+        if a.alert.status != AlertStatus::Closed {
+            self.set_notification("Alert is not closed".into(), NotificationType::Warning);
+            return;
+        }
+        let result = self.db.reopen_alert(a.alert.id, None);
+        self.finish_triage_mutation(result, "Alert reopened".into(), NotificationType::Success);
     }
 
     /// Focus a specific alert workbench pane. Navigates to Alerts first if needed.
@@ -1464,10 +1489,28 @@ impl App {
             self.set_notification("No alert selected".into(), NotificationType::Warning);
             return;
         };
-        let _ = self.db.update_alert_status(a.alert.id, status, None);
-        let _ = self.db.mark_alert_read(a.alert.id, true);
+        let result = self
+            .db
+            .update_alert_status(a.alert.id, status, None)
+            .and_then(|()| self.db.mark_alert_read(a.alert.id, true));
+        self.finish_triage_mutation(result, msg.into(), ntype);
+    }
+
+    /// Refresh triage views and report the storage result honestly.
+    pub(crate) fn finish_triage_mutation(
+        &mut self,
+        result: anyhow::Result<()>,
+        success_message: String,
+        success_type: NotificationType,
+    ) {
         self.refresh_alerts();
-        self.set_notification(msg.into(), ntype);
+        match result {
+            Ok(()) => self.set_notification(success_message, success_type),
+            Err(error) => self.set_notification(
+                format!("Alert update failed: {error}"),
+                NotificationType::Error,
+            ),
+        }
     }
 
     pub fn refresh_articles(&mut self) {
@@ -1793,14 +1836,19 @@ impl App {
             closed_reason: data.alert.closed_reason.clone(),
         };
 
+        let indicator_ids: Vec<i64> = data.indicators.iter().map(|ind| ind.id).collect();
+        let enrichment_by_indicator = self
+            .db
+            .get_latest_enrichment_results_for_indicators(&indicator_ids)
+            .ok()?;
         let indicators = data
             .indicators
             .iter()
             .map(|ind| {
-                let enrichments = self
-                    .db
-                    .get_latest_enrichment_results(ind.id)
-                    .unwrap_or_default()
+                let enrichments = enrichment_by_indicator
+                    .get(&ind.id)
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[])
                     .iter()
                     .map(|er| EnrichmentViewModel {
                         provider_id: er.provider_id,
@@ -2161,6 +2209,85 @@ mod tests {
         let (msg, ntype) = app.notification.as_ref().unwrap();
         assert_eq!(*ntype, NotificationType::Warning);
         assert!(msg.contains("No alert selected"));
+        let _ = std::fs::remove_file(&app.paths.db_file);
+    }
+
+    #[test]
+    fn triage_reopen_refuses_non_closed_alert() {
+        let (mut app, feed_id, keyword_id) = setup_app("reopen_open");
+        let alert_id = app
+            .db
+            .create_alert(&AlertCreate {
+                feed_id,
+                keyword_id,
+                title: Some("Still open".into()),
+                content_snippet: "content".into(),
+                criticality: Criticality::High,
+                content_hash: "reopen-open".into(),
+                metadata_json: None,
+            })
+            .unwrap();
+        app.refresh_alerts();
+        app.workbench_state.selected_alert_index = app
+            .workbench_state
+            .alerts
+            .iter()
+            .position(|a| a.id == alert_id)
+            .unwrap();
+
+        app.triage_reopen();
+
+        assert_eq!(
+            app.db.get_alert(alert_id).unwrap().unwrap().status,
+            AlertStatus::New
+        );
+        let (message, kind) = app.notification.as_ref().unwrap();
+        assert_eq!(*kind, NotificationType::Warning);
+        assert_eq!(message, "Alert is not closed");
+        let _ = std::fs::remove_file(&app.paths.db_file);
+    }
+
+    #[test]
+    fn triage_status_db_error_shows_error_notification() {
+        let (mut app, feed_id, keyword_id) = setup_app("triage_db_error");
+        let alert_id = app
+            .db
+            .create_alert(&AlertCreate {
+                feed_id,
+                keyword_id,
+                title: Some("Unwritable alert".into()),
+                content_snippet: "content".into(),
+                criticality: Criticality::High,
+                content_hash: "triage-db-error".into(),
+                metadata_json: None,
+            })
+            .unwrap();
+        app.refresh_alerts();
+        app.workbench_state.selected_alert_index = app
+            .workbench_state
+            .alerts
+            .iter()
+            .position(|a| a.id == alert_id)
+            .unwrap();
+        let connection = rusqlite::Connection::open(&app.paths.db_file).unwrap();
+        connection
+            .execute(
+                "CREATE TRIGGER reject_alert_update BEFORE UPDATE ON alerts
+                 BEGIN SELECT RAISE(FAIL, 'forced update failure'); END;",
+                [],
+            )
+            .unwrap();
+        drop(connection);
+
+        app.triage_acknowledge();
+
+        assert_eq!(
+            app.db.get_alert(alert_id).unwrap().unwrap().status,
+            AlertStatus::New
+        );
+        let (message, kind) = app.notification.as_ref().unwrap();
+        assert_eq!(*kind, NotificationType::Error);
+        assert!(message.contains("forced update failure"));
         let _ = std::fs::remove_file(&app.paths.db_file);
     }
 

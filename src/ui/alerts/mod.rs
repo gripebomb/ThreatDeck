@@ -473,10 +473,12 @@ fn handle_enum_select_key(app: &mut App, key: KeyEvent) {
                         ];
                         if let Some(&status) = statuses.get(idx) {
                             let note = Some(&*format!("Set to {:?}", status));
-                            let _ = app.db.update_alert_status(alert_id, status, note);
-                            let _ = app.db.mark_alert_read(alert_id, true);
-                            app.refresh_alerts();
-                            app.set_notification(
+                            let result = app
+                                .db
+                                .update_alert_status(alert_id, status, note)
+                                .and_then(|()| app.db.mark_alert_read(alert_id, true));
+                            app.finish_triage_mutation(
+                                result,
                                 format!("Status: {:?}", status),
                                 crate::types::NotificationType::Success,
                             );
@@ -493,9 +495,9 @@ fn handle_enum_select_key(app: &mut App, key: KeyEvent) {
                             crate::types::AlertDisposition::NeedsMoreContext,
                         ];
                         if let Some(&disp) = dispositions.get(idx) {
-                            let _ = app.db.update_alert_disposition(alert_id, disp, None);
-                            app.refresh_alerts();
-                            app.set_notification(
+                            let result = app.db.update_alert_disposition(alert_id, disp, None);
+                            app.finish_triage_mutation(
+                                result,
                                 format!("Disposition: {:?}", disp),
                                 crate::types::NotificationType::Success,
                             );
@@ -509,9 +511,9 @@ fn handle_enum_select_key(app: &mut App, key: KeyEvent) {
                             crate::types::Criticality::Critical,
                         ];
                         if let Some(&sev) = severities.get(idx) {
-                            let _ = app.db.update_alert_severity(alert_id, Some(sev), None);
-                            app.refresh_alerts();
-                            app.set_notification(
+                            let result = app.db.update_alert_severity(alert_id, Some(sev), None);
+                            app.finish_triage_mutation(
+                                result,
                                 format!("Severity: {:?}", sev),
                                 crate::types::NotificationType::Success,
                             );
@@ -561,26 +563,25 @@ fn handle_note_input_key(app: &mut App, key: KeyEvent) {
         KeyCode::Enter => {
             if let Some(a) = app.alerts_list.get(app.alerts_selected) {
                 if !app.triage_note_input.is_empty() {
-                    match app.triage_input_target {
-                        crate::types::TriageInputTarget::Note => {
-                            let _ = app.db.add_alert_note(a.alert.id, &app.triage_note_input);
-                            app.set_notification(
-                                "Note saved — shown in Triage panel below".into(),
-                                crate::types::NotificationType::Success,
-                            );
-                        }
-                        crate::types::TriageInputTarget::Owner => {
-                            let _ = app.db.assign_alert_owner(
+                    let (result, success_message) = match app.triage_input_target {
+                        crate::types::TriageInputTarget::Note => (
+                            app.db.add_alert_note(a.alert.id, &app.triage_note_input),
+                            "Note saved — shown in Triage panel below".to_string(),
+                        ),
+                        crate::types::TriageInputTarget::Owner => (
+                            app.db.assign_alert_owner(
                                 a.alert.id,
                                 Some(&app.triage_note_input),
                                 None,
-                            );
-                            app.set_notification(
-                                format!("Owner set to {}", app.triage_note_input),
-                                crate::types::NotificationType::Success,
-                            );
-                        }
-                    }
+                            ),
+                            format!("Owner set to {}", app.triage_note_input),
+                        ),
+                    };
+                    app.finish_triage_mutation(
+                        result,
+                        success_message,
+                        crate::types::NotificationType::Success,
+                    );
                 }
             }
             app.triage_note_input_mode = false;

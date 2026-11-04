@@ -91,6 +91,8 @@ pub enum CommandAvailability {
     WhenAlertSelected,
     WhenKeywordSelected,
     WhenNotificationRouteConfigured(NotificationRouteKind),
+    WhenScreen(Screen),
+    WhenScreenAlertSelected(Screen),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
