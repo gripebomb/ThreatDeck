@@ -19,8 +19,14 @@ pub fn draw_alert_details(f: &mut Frame, app: &App, area: Rect, focused: bool) {
     } else {
         app.theme.border
     };
+    let focus_marker = if focused { "▶ " } else { "  " };
+    let hints = if focused {
+        " · j/k scroll · x export"
+    } else {
+        ""
+    };
     let block = Block::default()
-        .title("Alert Details")
+        .title(format!("{}Alert Details{}", focus_marker, hints))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color));
 

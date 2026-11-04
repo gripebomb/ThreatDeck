@@ -27,10 +27,17 @@ pub fn draw_context_panel(f: &mut Frame, app: &App, area: Rect, focused: bool) {
         Line::from("Metadata"),
         Line::from("History"),
     ];
+    let focus_marker = if focused { "▶ " } else { "  " };
+    let hints = if focused {
+        " · [/] tabs · j/k navigate · y copy · e enrich"
+    } else {
+        ""
+    };
     let tabs = Tabs::new(titles)
         .block(
             Block::default()
                 .borders(Borders::TOP | Borders::LEFT | Borders::RIGHT)
+                .title(format!("{}Context{}", focus_marker, hints))
                 .border_style(if focused {
                     Style::default().fg(app.theme.primary)
                 } else {
@@ -117,7 +124,10 @@ fn draw_iocs(f: &mut Frame, app: &App, area: Rect, indicators: &[IndicatorViewMo
         };
         Row::new(vec![
             Cell::from(ind.indicator_type.as_str()),
-            Cell::from(ind.normalized_value.as_str()),
+            Cell::from(crate::ui::utils::truncate_for_display(
+                &ind.normalized_value,
+                40,
+            )),
             Cell::from(ind.sighting_count.to_string()),
             Cell::from(
                 ind.risk_score

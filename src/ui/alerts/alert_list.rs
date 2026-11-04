@@ -25,6 +25,13 @@ pub fn draw_alert_list(f: &mut Frame, app: &App, area: Rect, focused: bool) {
     } else {
         "Alerts".to_string()
     };
+    let focus_marker = if focused { "▶ " } else { "  " };
+    let hints = if focused {
+        " · j/k select · Enter details · Space read"
+    } else {
+        ""
+    };
+    let full_title = format!("{}{}{}", focus_marker, title, hints);
     let border_color = if focused {
         app.theme.primary
     } else {
@@ -33,7 +40,7 @@ pub fn draw_alert_list(f: &mut Frame, app: &App, area: Rect, focused: bool) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color))
-        .title(title);
+        .title(full_title);
 
     // Empty state.
     if count == 0 {
@@ -74,12 +81,18 @@ pub fn draw_alert_list(f: &mut Frame, app: &App, area: Rect, focused: bool) {
                     .style(Style::default().fg(sev_color).add_modifier(Modifier::BOLD)),
             ];
             if compact {
-                cells.push(Cell::from(item.title.as_str()));
+                cells.push(Cell::from(crate::ui::utils::truncate_for_display(
+                    &item.title,
+                    25,
+                )));
             } else {
                 cells.push(
                     Cell::from(format!("{}", item.status)).style(Style::default().fg(app.theme.fg)),
                 );
-                cells.push(Cell::from(item.title.as_str()));
+                cells.push(Cell::from(crate::ui::utils::truncate_for_display(
+                    &item.title,
+                    40,
+                )));
                 cells.push(Cell::from(item.feed_name.as_str()));
                 cells.push(
                     Cell::from(time_ago(item.detected_at))
